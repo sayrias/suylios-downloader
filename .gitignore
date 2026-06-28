@@ -1,0 +1,38 @@
+# ── Derleme çıktıları ──
+build/
+dist/
+*.spec
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+venv/
+.venv/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── İşletim Sistemi ──
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ── Uygulama Verileri ──
+data/
+Downloads/
+*.log
+
+# ── FFmpeg (kullanıcı kendi ekler veya CI/CD ekler) ──
+bin/ffmpeg.exe
+bin/ffprobe.exe
+
+# ── Kullanıcı Ayarları ──
+config.json
+scratch/

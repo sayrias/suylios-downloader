@@ -1,0 +1,15 @@
+=== SUYLIOS GÖRÜNÜM & TEMA FOTOĞRAF REHBERİ ===
+
+Temalar sayfasında gözüken varsayılan renkli arka planlar yerine kendi uygulama ekran görüntülerinizi veya özel tasarımlarınızı göstermek istiyorsanız:
+
+Aşağıdaki isimlerle PNG veya JPG dosyalarınızı bu klasöre (src/ui/assets/themes/) yapıştırmanız yeterlidir:
+
+1. suylios.png  -> Suylios Siber (Varsayılan Neon) teması resmi
+2. beyaz.png    -> Açık Tema (Gündüz) resmi
+3. koyu.png     -> Koyu Tema (Kurşuni Gri) resmi
+4. matrix.png   -> Zümrüt Hacker (Yeşil) teması resmi
+5. crimson.png  -> Crimson Gece (Kırmızı) teması resmi
+6. gold.png     -> Günbatımı Gold (Sarı) teması resmi
+
+Tavsiye Edilen Boyut: 320 x 180 piksel (16:9 oranında PNG veya JPG).
+Dosya eklemediğiniz temalar otomatik olarak modern siber gradyan tasarımlarıyla sergilenmeye devam eder.
