@@ -411,21 +411,28 @@
       card.className = 'history-card';
       const sizeStr = item.total_bytes ? formatSize(item.total_bytes) : completedWord;
       const extractor = item.extractor_name || otherWord;
+      
+      const thumbContent = item.thumbnail ? `<img src="${item.thumbnail}" style="width:100%; height:100%; object-fit:cover; border-radius:10px;">` : `📁`;
+      const formatChip = item.format_type ? `<span style="background:rgba(0, 240, 255, 0.15); color:var(--accent-cyan); padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; text-transform:uppercase; border:1px solid rgba(0,240,255,0.3);">${item.format_type}</span>` : '';
+      const qualityChip = item.quality && item.quality !== 'best' ? `<span style="background:rgba(168, 85, 247, 0.15); color:#c084fc; padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; border:1px solid rgba(168,85,247,0.3);">${item.quality}</span>` : '';
+
       card.innerHTML = `
         <div class="history-card-left">
-          <div class="history-card-icon">📁</div>
+          <div class="history-card-icon" style="overflow:hidden; position:relative; border:1px solid rgba(255,255,255,0.1);">${thumbContent}</div>
           <div class="history-card-info">
             <div class="history-card-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
-            <div class="history-card-meta">
+            <div class="history-card-meta" style="flex-wrap:wrap; gap:8px;">
+              ${formatChip}
+              ${qualityChip}
               <span>📅 ${item.date_str || ''}</span>
               <span>📦 ${sizeStr}</span>
-              <span>🏷️ ${escapeHtml(extractor)}</span>
+              <span style="color:var(--text-accent);">🏷️ ${escapeHtml(extractor)}</span>
             </div>
           </div>
         </div>
         <div class="history-card-actions">
           <button class="btn-secondary btn-sm btn-open-hist" data-id="${item.id}" title="${openFolderText}">📁 ${openFolderText}</button>
-          <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="${deleteText}" style="color:#ef4444;">🗑️</button>
+          <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="${deleteText}" style="color:#ef4444; border-color:rgba(239,68,68,0.3);">🗑️</button>
         </div>
       `;
       
@@ -440,7 +447,8 @@
         delBtn.addEventListener('click', async () => {
           await callApi('delete_history_item', item.id);
           renderHistory();
-          showToast('Kayıt silindi', 'info');
+          const delToast = window.CURRENT_LANG === 'en' ? 'Record deleted' : 'Kayıt silindi';
+          showToast(delToast, 'info');
         });
       }
       dom.historyList.appendChild(card);
