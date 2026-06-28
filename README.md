@@ -90,5 +90,5 @@ Suylios Downloader operates with complete local isolation. All network requests 
 
 ## 👨‍💻 Author & License
 
-Developed with ❤️ by **Sayrias** & **Antigravity**.  
+Developed with ❤️ by **Sayrias**.  
 Licensed under the [MIT License](LICENSE). Feel free to fork, customize, and contribute!
