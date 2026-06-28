@@ -64,9 +64,9 @@ def _get_app_root() -> Path:
 
 
 def _is_portable() -> bool:
-    """Detect portable mode by looking for a ``./bin/`` directory next to
-    the executable / project root."""
-    return (_get_app_root() / "bin").is_dir()
+    """Detect portable mode by looking for ./bin/ or ./src/ next to the executable / project root."""
+    root = _get_app_root()
+    return getattr(sys, "frozen", False) or (root / "bin").is_dir() or (root / "src").is_dir() or (root / "config.json").exists()
 
 
 def _default_download_dir() -> str:
@@ -186,6 +186,11 @@ class Config:
     def get_download_dir(self) -> str:
         """Return the current download directory, creating it if needed."""
         dl_dir = self.get("download_dir", _default_download_dir())
+        default_dl = _default_download_dir()
+        if not dl_dir or dl_dir.endswith("Downloads") or dl_dir.endswith("Suylios") or "Downloader" in dl_dir:
+            if dl_dir != default_dl:
+                dl_dir = default_dl
+                self.set("download_dir", dl_dir)
         Path(dl_dir).mkdir(parents=True, exist_ok=True)
         return dl_dir
 

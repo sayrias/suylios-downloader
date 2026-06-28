@@ -443,6 +443,38 @@ class Bridge:
         }
 
     # ------------------------------------------------------------------
+    # Localization / Locales
+    # ------------------------------------------------------------------
+
+    def get_available_locales(self) -> list[dict[str, str]]:
+        """Return list of available localization languages."""
+        locales = [{"code": "tr", "name": "Türkçe"}, {"code": "en", "name": "English"}]
+        try:
+            ui_dir = Path(_resolve_ui_path()).parent
+            loc_dir = ui_dir / "locales"
+            if loc_dir.exists():
+                for sub in loc_dir.iterdir():
+                    if sub.is_dir() and sub.name not in ["tr", "en"]:
+                        json_file = sub / f"{sub.name}.json"
+                        if json_file.exists():
+                            locales.append({"code": sub.name, "name": sub.name.upper()})
+        except Exception as exc:
+            logger.error("Error scanning locales: %s", exc)
+        return locales
+
+    def get_locale(self, lang: str) -> dict[str, str]:
+        """Load and return translation dictionary for the requested language code."""
+        try:
+            ui_dir = Path(_resolve_ui_path()).parent
+            for p in [ui_dir / "locales" / lang / f"{lang}.json", ui_dir / "locales" / f"{lang}.json"]:
+                if p.exists():
+                    with open(p, "r", encoding="utf-8") as fh:
+                        return json.load(fh)
+        except Exception as exc:
+            logger.error("Error loading locale %s: %s", lang, exc)
+        return {}
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 

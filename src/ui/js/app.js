@@ -139,6 +139,7 @@
   }
 
   async function onApiReady() {
+    if (state.apiReady) return;
     state.apiReady = true;
     dom.loadingOverlay?.classList.add('hidden');
 
@@ -399,10 +400,17 @@
     }
     if (emptyEl) emptyEl.classList.add('hidden');
 
+    const lang = window.CURRENT_LANG || 'tr';
+    const completedWord = lang === 'en' ? 'Completed' : 'Tamamlandı';
+    const otherWord = lang === 'en' ? 'Other' : 'Diğer';
+    const openFolderText = lang === 'en' ? 'Open Folder' : 'Klasörü Aç';
+    const deleteText = lang === 'en' ? 'Remove from list' : 'Listeden Sil';
+
     history.forEach(item => {
       const card = document.createElement('div');
       card.className = 'history-card';
-      const sizeStr = item.total_bytes ? formatSize(item.total_bytes) : 'Tamamlandı';
+      const sizeStr = item.total_bytes ? formatSize(item.total_bytes) : completedWord;
+      const extractor = item.extractor_name || otherWord;
       card.innerHTML = `
         <div class="history-card-left">
           <div class="history-card-icon">📁</div>
@@ -411,13 +419,13 @@
             <div class="history-card-meta">
               <span>📅 ${item.date_str || ''}</span>
               <span>📦 ${sizeStr}</span>
-              <span>🏷️ ${escapeHtml(item.extractor_name || 'Diğer')}</span>
+              <span>🏷️ ${escapeHtml(extractor)}</span>
             </div>
           </div>
         </div>
         <div class="history-card-actions">
-          <button class="btn-secondary btn-sm btn-open-hist" data-id="${item.id}" title="Klasörü Aç">📁 Klasörü Aç</button>
-          <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="Listeden Sil" style="color:#ef4444;">🗑️</button>
+          <button class="btn-secondary btn-sm btn-open-hist" data-id="${item.id}" title="${openFolderText}">📁 ${openFolderText}</button>
+          <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="${deleteText}" style="color:#ef4444;">🗑️</button>
         </div>
       `;
       
@@ -544,9 +552,12 @@
     progressPercent.textContent = Math.round(progress) + '%';
     progressSpeed.textContent = dl.speed ? formatSpeed(dl.speed) : '— MB/s';
     
+    const lang = window.CURRENT_LANG || 'tr';
+    const completedText = lang === 'en' ? 'Completed' : 'Tamamlandı';
+
     if (dl.status === 'completed' || dl.status === 'complete') {
       const finalSize = dl.total_size || dl.downloaded_size || 0;
-      progressSize.textContent = finalSize > 0 ? `${formatSize(finalSize)} • Tamamlandı` : 'Tamamlandı';
+      progressSize.textContent = finalSize > 0 ? `${formatSize(finalSize)} • ${completedText}` : completedText;
       progressEta.textContent = '';
     } else {
       progressSize.textContent = formatSizeRange(dl.downloaded_size, dl.total_size);
@@ -564,8 +575,8 @@
       downloading: { text: 'İndiriliyor', class: 'downloading' },
       paused:      { text: 'Duraklatıldı', class: 'paused' },
       converting:  { text: 'Dönüştürülüyor', class: 'converting' },
-      complete:    { text: 'Tamamlandı', class: 'complete' },
-      completed:   { text: 'Tamamlandı', class: 'complete' },
+      complete:    { text: completedText, class: 'complete' },
+      completed:   { text: completedText, class: 'complete' },
       cancelled:   { text: 'İptal Edildi', class: 'error' },
       error:       { text: 'Hata', class: 'error' },
       queued:      { text: 'Sırada', class: 'downloading' },
@@ -591,7 +602,7 @@
     // Complete: show ETA as "Tamamlandı"
     if (dl.status === 'complete' || dl.status === 'completed') {
       progressPercent.textContent = '100%';
-      progressEta.textContent = 'Tamamlandı';
+      progressEta.textContent = completedText;
       progressSpeed.textContent = '';
       progressFill.style.width = '100%';
       progressGlow.style.width = '100%';
@@ -605,10 +616,13 @@
       progressSpeed.textContent = '';
     }
 
-    const lang = window.CURRENT_LANG || 'tr';
     const map = lang === 'en' ? TR_TO_EN : EN_TO_TR;
     if (badge && map[badge.textContent.trim()]) badge.textContent = map[badge.textContent.trim()];
     if (progressEta && map[progressEta.textContent.trim()]) progressEta.textContent = map[progressEta.textContent.trim()];
+    if (progressSize) {
+      if (lang === 'en') progressSize.textContent = progressSize.textContent.replace('Tamamlandı', 'Completed');
+      else progressSize.textContent = progressSize.textContent.replace('Completed', 'Tamamlandı');
+    }
     card.querySelectorAll('.card-action-btn').forEach(b => {
       const t = b.getAttribute('title');
       if (t && map[t]) b.setAttribute('title', map[t]);
@@ -874,198 +888,44 @@
     });
   }
 
-  const TR_TO_EN = {
-    'AYARLAR': 'SETTINGS',
-    'Ayarlar': 'Settings',
-    'Genel Ayarlar': 'General Settings',
-    'Uygulama genel tercihlerini yapılandırın': 'Configure general application preferences',
-    'Görünüm & Temalar': 'Appearance & Themes',
-    'Arayüz renk paleti ve estetik görünüm modları': 'Interface color palette and aesthetic display modes',
-    'İndirme Ayarları': 'Download Settings',
-    'İndirme konumu ve dosya organizasyonu': 'Download location and file organization',
-    'Desteklenen Platformlar & +18 Siteler': 'Supported Platforms & +18 Sites',
-    'Önemli sitelerin özel kayıt dizinleri, VIP çerezleri (cookie) ve kalite ayarları': 'Special save directories for sites, VIP cookies and quality settings',
-    'Format & Kalite': 'Format & Quality',
-    'Varsayılan format ve kalite ayarları': 'Default format and quality preferences',
-    'Ağ Ayarları': 'Network Settings',
-    'Bağlantı ve indirme hızı yapılandırması': 'Connection and download speed configuration',
-    'Gelişmiş Ayarlar': 'Advanced Settings',
-    'İleri düzey yapılandırma seçenekleri': 'Advanced configuration options',
-    'Hakkında': 'About',
-    'Uygulama bilgileri ve lisans': 'Application information and license',
-    'İndirme Geçmişi': 'Download History',
-    'Daha önce indirilen tüm dosyalar ve arşivler': 'All previously downloaded files and archives',
-    'Geçmiş Boş': 'History Empty',
-    'Henüz tamamlanmış bir indirme bulunmuyor.': 'No completed downloads found yet.',
-    'Dil': 'Language',
-    'Simge durumuna küçültülmüş başlat': 'Start minimized',
-    'Pano izleme': 'Clipboard monitor',
-    'İndirme klasörü': 'Download folder',
-    'Site bazlı alt klasörler': 'Site-based subfolders',
-    'Dosya adı şablonu': 'Filename template',
-    'Varsayılan video formatı': 'Default video format',
-    'Varsayılan ses formatı': 'Default audio format',
-    'Varsayılan video kalitesi': 'Default video quality',
-    'MP3 bit hızı': 'MP3 bitrate',
-    'Eş zamanlı indirme sayısı': 'Concurrent downloads',
-    'Hız sınırı': 'Speed limit',
-    'Proxy sunucusu': 'Proxy server',
-    'FFmpeg yolu': 'FFmpeg path',
-    'Önbelleği temizle': 'Clear cache',
-    'Ayarları sıfırla': 'Reset settings',
-    'Alt Klasör Adı': 'Subfolder Name',
-    'Çerezler (cookies.txt)': 'Cookies (cookies.txt)',
-    'Maksimum Kalite Tercihi': 'Maximum Quality Preference',
-    'Arayüz dili': 'Interface language',
-    'Uygulama açıldığında sistem tepsisinde başlat': 'Start in system tray when application opens',
-    'Panoya kopyalanan URL\'leri otomatik algıla': 'Automatically detect copied URLs in clipboard',
-    'Dosyaların indirileceği varsayılan konum': 'Default location where files will be saved',
-    'Her site için ayrı klasör oluştur (YouTube, Twitter vb.)': 'Create separate folders for each site (YouTube, Twitter etc.)',
-    'İndirilen dosyalar için ad şablonu': 'Naming template for downloaded files',
-    'İndirme için tercih edilen video formatı': 'Preferred video format for downloads',
-    'İndirme için tercih edilen ses formatı': 'Preferred audio format for downloads',
-    'Video indirmeler için varsayılan çözünürlük': 'Default resolution for video downloads',
-    'MP3 dönüştürme için bit hızı': 'Bitrate for MP3 conversion',
-    '0 = Sınırsız (Aynı anda inecek maksimum dosya)': '0 = Unlimited (Maximum concurrent downloads)',
-    '0 = Sınırsız (MB/s cinsinden)': '0 = Unlimited (in MB/s)',
-    'HTTP/SOCKS proxy adresi (isteğe bağlı)': 'HTTP/SOCKS proxy address (optional)',
-    'FFmpeg yürütülebilir dosya konumu (otomatik algılanır)': 'FFmpeg executable location (auto-detected)',
-    'Geçici dosyaları ve önbellek verilerini sil': 'Delete temporary files and cache data',
-    'Tüm ayarları fabrika varsayılanlarına döndür': 'Restore all settings to factory defaults',
-    'Downloads klasörü içindeki alt klasör adı': 'Subfolder name inside Downloads directory',
-    'Özel oturum veya yaş doğrulaması gerektiren siteler için cookies.txt dosyası': 'cookies.txt file for sites requiring authentication or age verification',
-    'Bu platform için indirme kalitesi': 'Download quality for this platform',
-    'URL yapıştır veya Ctrl+V bas...': 'Paste URL or press Ctrl+V...',
-    'Klasör adı...': 'Folder name...',
-    'Dosya seçilmedi...': 'No file selected...',
-    'Geçmişi Temizle': 'Clear History',
-    'Ayarları Kaydet': 'Save Settings',
-    'Dosya Seç': 'Select File',
-    'Temizle': 'Clear',
-    'İndir': 'Download',
-    'Sıfırla': 'Reset',
-    'Tek Tıkla İndir': 'One-Click Download',
-    'Gözat': 'Browse',
-    'Format': 'Format',
-    'Kalite': 'Quality',
-    '✨ Otomatik (Dengeli)': '✨ Automatic (Balanced)',
-    '🎞️ MKV Video (Kayıpsız)': '🎞️ MKV Video (Lossless)',
-    '🎵 MP3 Ses (HQ)': '🎵 MP3 Audio (HQ)',
-    '💎 FLAC Ses (Stüdyo)': '💎 FLAC Audio (Studio)',
-    '📱 M4A Ses (Apple)': '📱 M4A Audio (Apple)',
-    '🎙️ WAV Ham Ses': '🎙️ WAV Raw Audio',
-    '⚡ Otomatik (Orijinal Kalite)': '⚡ Automatic (Original Quality)',
-    'Yüksek Çözünürlük (720p)': 'High Definition (720p)',
-    '📱 Standart SD (480p)': '📱 Standard SD (480p)',
-    '💾 Tasarruflu (360p)': '💾 Data Saver (360p)',
-    'İndirmeye Hazır': 'Ready to Download',
-    'URL yapıştırarak veya Ctrl + V basarak indirmeye başla': 'Paste a URL or press Ctrl + V to start downloading',
-    'Bağlanıyor...': 'Connecting...',
-    'Ana Sayfa': 'Home',
-    'Geçmiş': 'History',
-    'Hazır': 'Ready',
-    'VIP Çerez': 'VIP Cookie',
-    'Bulut': 'Cloud',
-    'Filigransız': 'No Watermark',
-    'Sesli Video': 'Video with Audio',
-    'Hızlı Akış': 'Fast Stream',
-    'Hızlı': 'Fast',
-    'Aktif': 'Active',
-    '+18 Destekli': '+18 Supported',
-    '1000+ Platform': '1000+ Platforms',
-    'Arşiv': 'Archive',
-    'ExHentai Çerez': 'ExHentai Cookie',
-    '⚙️ Ayarla': '⚙️ Configure',
-    'Platform Ayarı': 'Platform Configuration',
-    '⏳ Yakında (Ongoing)': '⏳ Coming Soon (Ongoing)',
-    'Sürüm 1.1.0': 'Version 1.1.0',
-    'Hızlı, güvenilir ve şık medya indirici': 'Fast, reliable and sleek media downloader',
-    '© 2026 Suylios. Tüm hakları saklıdır.': '© 2026 Suylios. All rights reserved.',
-    'Otomatik algılandı': 'Auto-detected',
-    'Duraklat': 'Pause',
-    'Devam Et': 'Resume',
-    'İptal': 'Cancel',
-    'Klasörü Aç': 'Open Folder',
-    'Kaldır': 'Remove',
-    'İndiriliyor': 'Downloading',
-    'Duraklatıldı': 'Paused',
-    'Dönüştürülüyor': 'Converting',
-    'Tamamlandı': 'Completed',
-    'İptal Edildi': 'Cancelled',
-    'Hata': 'Error',
-    'Sırada': 'Queued',
-    'Birleştiriliyor': 'Merging',
-    'Hesaplanıyor...': 'Calculating...',
-    'İndirme başlıyor...': 'Starting download...',
-    'İndiriliyor...': 'Downloading...',
-    'öğe': 'items',
-    '🎵 MP3 formatına dönüştürülüyor...': '🎵 Converting to MP3 format...',
-    '⚙️ Dönüştürülüyor...': '⚙️ Converting...',
-    '📦 Video ve ses birleştiriliyor...': '📦 Merging video and audio...',
-    '⏳ İndiriliyor...': '⏳ Downloading...',
-    '🚀 Başlatılıyor...': '🚀 Initializing...',
-    'Hata oluştu': 'Error occurred',
-    'İptal edildi': 'Cancelled',
-    'Geçmiş temizlendi': 'History cleared',
-    'Lütfen bir URL girin': 'Please enter a URL',
-    'Geçersiz URL formatı': 'Invalid URL format',
-    'Bu URL zaten indirme listesinde aktif!': 'This URL is already active in the download list!',
-    'İndirme eklendi': 'Download added',
-    'İndirme eklenemedi': 'Failed to add download',
-    'Kayıt silindi': 'Record deleted',
-    'İndirme iptal edildi': 'Download cancelled',
-    'Önbellek temizlendi': 'Cache cleared',
-    'Ayarlar başarıyla sıfırlandı': 'Settings reset successfully',
-    'Ayarlar sıfırlandı': 'Settings reset',
-    'Görünüm modu güncellendi': 'Appearance mode updated',
-    'Platform ayarları kaydedildi': 'Platform settings saved',
-    'Panoda yeni link algılandı: ': 'New link detected in clipboard: ',
-    'Tüm ayarlar varsayılan değerlerine sıfırlanacak. Emin misiniz?': 'All settings will be reset to default values. Are you sure?',
-    'Ayarları Sıfırla': 'Reset Settings',
-    'Onay': 'Confirm',
-    'Tamam': 'OK',
-    '🌟 4K Ultra HD (60fps)': '🌟 4K Ultra HD (60fps)',
-    '⚡ 2K Quad HD (1440p)': '⚡ 2K Quad HD (1440p)',
-    '🎯 Full HD (1080p)': '🎯 Full HD (1080p)',
-    '📺 HD Ready (720p)': '📺 HD Ready (720p)',
-    '💎 Kayıpsız (24-bit FLAC)': '💎 Lossless (24-bit FLAC)',
-    '🔥 320 kbps (HQ MP3)': '🔥 320 kbps (HQ MP3)',
-    '✨ 256 kbps (AAC Müzik)': '✨ 256 kbps (AAC Music)',
-    '⚡ 192 kbps (Standart)': '⚡ 192 kbps (Standard)',
-    '📻 128 kbps (Hızlı Ses)': '📻 128 kbps (Fast Audio)',
-    '💾 64 kbps (Mini Boyut)': '💾 64 kbps (Mini Size)',
-    'Genel': 'General',
-    'İndirme': 'Download',
-    'Platform & Siteler': 'Platforms & Sites',
-    'Ağ': 'Network',
-    'Gelişmiş': 'Advanced',
-    'Suylios Siber (Varsayılan)': 'Suylios Cyber (Default)',
-    'Açık Tema (Gündüz)': 'Light Theme (Day)',
-    'Koyu Tema (Kurşuni)': 'Dark Theme (Slate)',
-    'Zümrüt Hacker (Yeşil)': 'Emerald Hacker (Green)',
-    'Crimson Gece (Kırmızı)': 'Crimson Night (Red)',
-    'Günbatımı Gold (Sarı)': 'Sunset Gold (Yellow)',
-    '+18 Akış': '+18 Stream',
-    '+18 Hentai': '+18 Hentai',
-    '+18 Video': '+18 Video',
-    '4K Akış': '4K Stream',
-    'Reels & Story': 'Reels & Story',
-    'Video & GIF': 'Video & GIF',
-    'Galeri': 'Gallery',
-    'Sosyal': 'Social',
-    'Evrensel (Diğer)': 'Universal (Other)',
-    'Dosya': 'File',
-    'dosya': 'files'
-  };
+  let TR_TO_EN = {};
+  let EN_TO_TR = {};
 
-  const EN_TO_TR = {};
-  for (const [tr, en] of Object.entries(TR_TO_EN)) {
-    EN_TO_TR[en] = tr;
+  async function loadLocaleDictionary(lang) {
+    if (lang === 'tr') return;
+    try {
+      const cached = localStorage.getItem('suylios_locale_' + lang);
+      if (cached) {
+        const dict = JSON.parse(cached);
+        TR_TO_EN = dict;
+        EN_TO_TR = {};
+        for (const [k, v] of Object.entries(dict)) EN_TO_TR[v] = k;
+      }
+    } catch(e) {}
+
+    let dict = null;
+    if (getApi()) {
+      dict = await callApi('get_locale', lang);
+    }
+    if (!dict || Object.keys(dict).length === 0) {
+      try {
+        const res = await fetch(`locales/${lang}/${lang}.json`);
+        if (res.ok) dict = await res.json();
+      } catch(e) {}
+    }
+
+    if (dict && Object.keys(dict).length > 0) {
+      TR_TO_EN = dict;
+      EN_TO_TR = {};
+      for (const [k, v] of Object.entries(dict)) EN_TO_TR[v] = k;
+      try { localStorage.setItem('suylios_locale_' + lang, JSON.stringify(dict)); } catch(e) {}
+    }
   }
 
-  function applyLanguage(lang) {
+  async function applyLanguage(lang) {
     window.CURRENT_LANG = lang;
     try { localStorage.setItem('suylios_language', lang); } catch(e) {}
+    await loadLocaleDictionary(lang);
     const map = lang === 'en' ? TR_TO_EN : EN_TO_TR;
 
     // Traverse all potential text elements
@@ -1126,7 +986,6 @@
     if (state && state.downloads) {
       state.downloads.forEach(dl => updateDownloadCard(dl));
     }
-    updateUI();
   }
 
   function applySettingsToUI(settings) {
