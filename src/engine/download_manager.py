@@ -42,6 +42,17 @@ def format_user_error(err: Any) -> str:
         return "⚠️ Bu içeriği indirmek için premium üyelik gereklidir."
     if "notFound" in s or "HTTP Error 404" in s or "Video unavailable" in s or "Private video" in s:
         return "⚠️ İçerik bulunamadı, gizli veya silinmiş."
+    if "gofile" in s.lower():
+        if "notPremium" in s or "error-notPremium" in s or "requires a premium account" in s:
+            return "⚠️ Gofile uyarı: Bu dosya yalnızca Gofile Premium hesaplara açıktır veya günlük ücretsiz indirme limitine ulaşılmıştır. Lütfen Ayarlar -> Gofile kısmından Premium API anahtarı ekleyin veya VPN ile IP değiştirin."
+        if "notFound" in s or "error-notFound" in s:
+            return "⚠️ Gofile uyarı: Bu dosya silinmiş, gizlenmiş veya bağlantı süresi dolmuş."
+        if "ratelimit" in s.lower() or "error-ratelimit" in s.lower():
+            return "⚠️ Gofile uyarı: Gofile sunucularında indirme sınırına takıldınız. Lütfen birkaç dakika bekleyin veya VPN ile IP değiştirin."
+        if "no downloadable files found" in s.lower():
+            return "⚠️ Gofile uyarı: Bu klasörde indirilebilir herhangi bir dosya bulunamadı veya link geçersiz."
+        if "could not extract websitetoken" in s.lower():
+            return "⚠️ Gofile uyarı: Gofile güvenlik doğrulaması aşılamadı. Lütfen VPN kapatıp/açıp tekrar deneyin."
     if "ConnectTimeout" in s or "Connection timed out" in s or "timed out" in s.lower() or "Max retries exceeded" in s:
         return "⚠️ Sunucuya bağlanılamadı veya zaman aşımına uğradı. IP adresiniz sunucu tarafından engellenmiş olabilir (VPN deneyebilirsiniz)."
 

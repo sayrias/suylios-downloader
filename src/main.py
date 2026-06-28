@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
@@ -70,8 +71,8 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.0.0"
-APP_GITHUB = "https://github.com/AeroSuylios/Downloader"
+APP_VERSION = "1.1.0"
+APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 
 # ---------------------------------------------------------------------------
 # UI path resolution
@@ -278,6 +279,18 @@ class Bridge:
             return {"ok": True}
         except Exception as exc:
             logger.error("open_file_location failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def open_url(self, url: Any) -> dict[str, Any]:
+        """Open an external URL in the system's default web browser."""
+        try:
+            if isinstance(url, dict):
+                url = url.get("url", "")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                webbrowser.open(url)
+            return {"ok": True}
+        except Exception as exc:
+            logger.error("open_url failed: %s", exc)
             return {"ok": False, "error": str(exc)}
 
     def get_clipboard_text(self) -> str:

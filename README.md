@@ -21,19 +21,17 @@ Suylios Downloader; YouTube akışlarından +18 arşiv platformlarına, büyük 
 
 ## 📸 Uygulama Ekran Görüntüleri
 
-*(Ekran fotoğraflarını aşağıdaki rehbere göre çekip proje ana dizinine `screenshots` klasörü açarak içine ekleyebilirsiniz)*
-
 ### 1. Ana İndirme Üssü (Ana Sayfa)
-`![Ana Sayfa](screenshots/main_page.png)`
-> **Nasıl Çekilmeli:** Uygulamanın üst link yapıştırma çubuğu görünürken ve alt kısımda aktif indirme kartları (%100 tamamlanmış veya indirme aşamasında) listelenirken ekranın tam fotoğrafını alın.
+![Ana Sayfa](src/ui/assets/screenshots/mainpage.png)
+> Göz yormayan koyu uzay teması, anlık panodan URL yakalama çubuğu ve aktif indirme kartları.
 
 ### 2. Gelişmiş Ayarlar Menüsü
-`![Ayarlar Sekmesi](screenshots/settings_page.png)`
-> **Nasıl Çekilmeli:** Sol üstteki dişli (Ayarlar) butonuna tıklayıp yan menüden **Genel Ayarlar** veya **Ağ Ayarları** sekmesi açıkken ekran fotoğrafı alın.
+![Ayarlar Sekmesi](src/ui/assets/screenshots/settings.png)
+> Çok dilli arayüz (Türkçe/English), platformlara özel alt klasörleme ve VIP çerez yapılandırma ekranı.
 
 ### 3. Geniş Medya Kartı Detayı
-`![Medya Kartı](screenshots/media_card.png)`
-> **Nasıl Çekilmeli:** İndirmesi bitmiş, sol tarafında video kapak resmi (thumbnail) parlayan ve sağında yeşil **TAMAMLANDI** rozeti olan tek bir indirme kartını yakından çekin.
+![Medya Kartı](src/ui/assets/screenshots/card.png)
+> İndirmesi bitmiş, sol tarafında video kapak resmi parlayan ve klasörde açma butonu olan indirme kartı.
 
 ---
 

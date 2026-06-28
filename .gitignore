@@ -35,4 +35,5 @@ bin/ffprobe.exe
 
 # ── Kullanıcı Ayarları ──
 config.json
+history.json
 scratch/
