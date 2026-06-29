@@ -62,42 +62,14 @@ class BaseExtractor(ABC):
         url: str,
         output_path: str,
         format_id: str = "best",
-        progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        progress_hook=None,
+        start_time: str = "",
+        end_time: str = "",
+        embed_metadata: bool = True,
+        download_subtitles: bool = False,
+        subtitle_langs: str = "tr,en",
     ) -> str:
-        """Download the media from *url* into *output_path*.
-
-        Parameters
-        ----------
-        url:
-            The media URL to download.
-        output_path:
-            Destination directory (must exist).
-        format_id:
-            The desired format identifier (as returned by
-            :meth:`extract_info`).  Pass ``"best"`` for automatic
-            selection.
-        progress_hook:
-            Optional callback invoked periodically with a dict::
-
-                {
-                    "status":           str,   # "downloading" | "converting" | "finished" | "error"
-                    "downloaded_bytes": int,
-                    "total_bytes":      int,
-                    "speed":            float, # bytes / sec
-                    "eta":              int,   # seconds remaining
-                    "filename":         str,
-                }
-
-        Returns
-        -------
-        str
-            Absolute path to the downloaded (and possibly converted) file.
-
-        Raises
-        ------
-        ExtractionError
-            If the download fails irrecoverably.
-        """
+        """Download the media from *url* into *output_path*."""
         ...
 
 

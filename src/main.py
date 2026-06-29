@@ -131,6 +131,9 @@ class Bridge:
     def __init__(self) -> None:
         self._dm = DownloadManager()
         self._window: Optional[webview.Window] = None
+        self._tray_icon = None
+        self._force_quit = False
+        self._auto_shutdown_mode: str = ""  # "" | "shutdown" | "sleep"
 
     def set_window(self, window: webview.Window) -> None:
         """Store a reference to the host window (called once at start)."""
@@ -142,10 +145,19 @@ class Bridge:
 
     def add_download(
         self, url: str, format_type: str = "auto", quality: str = "best",
+        start_time: str = "", end_time: str = "",
+        embed_metadata: bool = True, download_subtitles: bool = False,
+        keep_original: bool = False,
     ) -> dict[str, Any]:
         """Enqueue a new download and return its task snapshot."""
         try:
-            task = self._dm.add_task(url, format_type, quality)
+            task = self._dm.add_task(
+                url=url, format_type=format_type, quality=quality,
+                start_time=start_time, end_time=end_time,
+                embed_metadata=embed_metadata,
+                download_subtitles=download_subtitles,
+                keep_original=keep_original,
+            )
             return {"ok": True, "task": task.to_dict()}
         except Exception as exc:
             logger.error("add_download failed: %s", exc, exc_info=True)
@@ -186,18 +198,29 @@ class Bridge:
         return {"ok": success}
 
     def show_desktop_notification(self, title: str, message: str) -> dict[str, Any]:
-        """Show a native Windows desktop balloon tip notification."""
+        """Show a native Windows desktop notification with custom app name."""
         try:
-            t_esc = str(title).replace("'", "''")
-            m_esc = str(message).replace("'", "''")
+            t_esc = str(title).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
+            m_esc = str(message).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
             ps = f"""
-            Add-Type -AssemblyName System.Windows.Forms
-            $icon = New-Object System.Windows.Forms.NotifyIcon
-            $icon.Icon = [System.Drawing.SystemIcons]::Information
-            $icon.Visible = $true
-            $icon.ShowBalloonTip(4000, '{t_esc}', '{m_esc}', [System.Windows.Forms.ToolTipIcon]::Info)
-            Start-Sleep -Seconds 3
-            $icon.Visible = $false
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+            $template = @"
+            <toast>
+                <visual>
+                    <binding template='ToastGeneric'>
+                        <text>{t_esc}</text>
+                        <text>{m_esc}</text>
+                    </binding>
+                </visual>
+            </toast>
+"@
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml($template)
+            $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Suylios Downloader").Show($toast)
             """
             subprocess.Popen(["powershell", "-NoProfile", "-Command", ps], creationflags=subprocess.CREATE_NO_WINDOW)
             return {"ok": True}
@@ -215,6 +238,7 @@ class Bridge:
         d["subfolders"] = d.get("create_subfolders", True)
         d["concurrent_downloads"] = d.get("max_concurrent", 3)
         d["start_minimized"] = d.get("start_minimized", False)
+        d["auto_start_windows"] = d.get("auto_start_windows", False)
         d["theme"] = d.get("theme", "basit-beyaz")
         return d
 
@@ -235,10 +259,34 @@ class Bridge:
             if "concurrent_downloads" in incoming or "max_concurrent" in incoming:
                 new_conc = int(incoming.get("concurrent_downloads", incoming.get("max_concurrent", 3)))
                 self._dm.update_max_concurrent(new_conc)
+            if "auto_start_windows" in incoming:
+                self._set_windows_autostart(bool(incoming["auto_start_windows"]))
             return {"ok": True, "success": True}
         except Exception as exc:
             logger.error("save_settings failed: %s", exc)
             return {"ok": False, "success": False, "error": str(exc)}
+
+    def _set_windows_autostart(self, enable: bool) -> None:
+        """Register or unregister app from Windows startup registry."""
+        if sys.platform != "win32":
+            return
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+            app_name = "SuyliosDownloader"
+            if enable:
+                exe_path = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" "{Path(__file__).resolve()}"'
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, exe_path)
+                logger.info("Windows autostart enabled: %s", exe_path)
+            else:
+                try:
+                    winreg.DeleteValue(key, app_name)
+                    logger.info("Windows autostart disabled.")
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception as exc:
+            logger.warning("Failed to set Windows autostart: %s", exc)
 
     def reset_settings(self) -> dict[str, Any]:
         """Reset all configuration to default values."""
@@ -296,10 +344,20 @@ class Bridge:
     def get_clipboard_text(self) -> str:
         """Read the current clipboard text (best-effort)."""
         try:
+            import tkinter as tk
+            root = tk.Tk()
+            root.withdraw()
+            text = root.clipboard_get()
+            root.destroy()
+            if text:
+                return str(text)
+        except Exception:
+            pass
+
+        try:
             if os.name == "nt":
                 import ctypes
                 import time
-                CF_UNICODETEXT = 13
                 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
                 opened = False
@@ -311,13 +369,20 @@ class Bridge:
                 if not opened:
                     return ""
                 try:
-                    handle = user32.GetClipboardData(CF_UNICODETEXT)
-                    if not handle:
-                        return ""
-                    kernel32.GlobalLock.restype = ctypes.c_wchar_p
-                    text = kernel32.GlobalLock(handle) or ""
-                    kernel32.GlobalUnlock(handle)
-                    return str(text)
+                    for fmt in (13, 1):  # CF_UNICODETEXT, CF_TEXT
+                        handle = user32.GetClipboardData(fmt)
+                        if handle:
+                            if fmt == 13:
+                                kernel32.GlobalLock.restype = ctypes.c_wchar_p
+                                text = kernel32.GlobalLock(handle) or ""
+                            else:
+                                kernel32.GlobalLock.restype = ctypes.c_char_p
+                                raw = kernel32.GlobalLock(handle)
+                                text = raw.decode("utf-8", errors="ignore") if raw else ""
+                            kernel32.GlobalUnlock(handle)
+                            if text:
+                                return str(text)
+                    return ""
                 finally:
                     user32.CloseClipboard()
             else:
@@ -421,15 +486,29 @@ class Bridge:
         except Exception as exc:
             logger.error("maximize_window failed: %s", exc)
 
-    def close_window(self) -> None:
-        """Gracefully shut down and close the window."""
-        try:
-            self._dm.shutdown()
-            config.save()
-        except Exception as exc:
-            logger.error("Shutdown error: %s", exc)
-        if self._window:
-            self._window.destroy()
+    def close_window(self) -> dict[str, Any]:
+        """Intercept window close request from UI."""
+        background_mode = config.get("background_mode", True)
+        active = self._dm.get_active_count()
+        scheduled = sum(1 for t in self._dm.get_all_tasks() if t.get("scheduled_at", 0) > 0)
+
+        if background_mode or active > 0 or scheduled > 0:
+            self.hide_to_tray()
+            if getattr(self, "_first_tray_notify", True):
+                self._first_tray_notify = False
+                if hasattr(self, "_tray_icon") and self._tray_icon:
+                    try:
+                        self._tray_icon.notify(
+                            "Suylios Downloader arka planda çalışmaya devam ediyor. Açmak veya kapatmak için gizli simgelere göz atın.",
+                            "Uygulama Arka Plana Taşındı"
+                        )
+                    except Exception as e:
+                        logger.warning("Tray notify failed: %s", e)
+            return {"action": "hidden"}
+
+        self.force_quit()
+        return {"action": "closed"}
+
 
     # ------------------------------------------------------------------
     # App info
@@ -475,8 +554,146 @@ class Bridge:
         return {}
 
     # ------------------------------------------------------------------
+    # v1.2.0 – Batch, Scheduled, Auto-shutdown, Media Preview, Tray
+    # ------------------------------------------------------------------
+
+    def add_batch_downloads(
+        self, urls_text: str, format_type: str = "auto", quality: str = "best",
+        embed_metadata: bool = True, download_subtitles: bool = False,
+    ) -> dict[str, Any]:
+        """Parse a newline-separated list of URLs and enqueue all."""
+        try:
+            urls = [u.strip() for u in urls_text.splitlines() if u.strip()]
+            if not urls:
+                return {"ok": False, "error": "No valid URLs provided."}
+            tasks = self._dm.add_batch_tasks(
+                urls=urls, format_type=format_type, quality=quality,
+                embed_metadata=embed_metadata, download_subtitles=download_subtitles,
+            )
+            return {"ok": True, "count": len(tasks), "tasks": [t.to_dict() for t in tasks]}
+        except Exception as exc:
+            logger.error("add_batch_downloads failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def schedule_download(
+        self, url: str, format_type: str = "auto", quality: str = "best",
+        scheduled_at: int = 0, start_time: str = "", end_time: str = "",
+    ) -> dict[str, Any]:
+        """Enqueue a download to start at a specific Unix timestamp."""
+        try:
+            task = self._dm.add_task(
+                url=url, format_type=format_type, quality=quality,
+                scheduled_at=scheduled_at, start_time=start_time, end_time=end_time,
+            )
+            return {"ok": True, "task": task.to_dict()}
+        except Exception as exc:
+            logger.error("schedule_download failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def set_auto_shutdown(self, mode: str) -> dict[str, Any]:
+        """Set auto-shutdown mode. mode: '' | 'shutdown' | 'sleep'"""
+        self._auto_shutdown_mode = mode
+        logger.info("Auto-shutdown mode set to: %s", mode)
+        return {"ok": True, "mode": mode}
+
+    def get_auto_shutdown(self) -> dict[str, Any]:
+        return {"mode": self._auto_shutdown_mode}
+
+    def has_active_downloads(self) -> dict[str, Any]:
+        """Return whether any downloads are actively running or scheduled."""
+        active = self._dm.get_active_count()
+        scheduled = sum(
+            1 for t in self._dm.get_all_tasks()
+            if t.get("scheduled_at", 0) > 0
+        )
+        return {"active": active, "scheduled": scheduled, "any": (active + scheduled) > 0}
+
+    def get_file_for_preview(self, task_id: str) -> dict[str, Any]:
+        """Return file path info for the built-in media player preview."""
+        try:
+            hist = config.get_history()
+            item = next((h for h in hist if h.get("id") == task_id), None)
+            if not item:
+                task_dict = self._dm.get_task(task_id)
+                item = task_dict
+            if not item:
+                return {"ok": False, "error": "Not found"}
+            filepath = item.get("filename", "")
+            if not filepath or not Path(filepath).exists():
+                return {"ok": False, "error": "File not found on disk."}
+            ext = Path(filepath).suffix.lower().lstrip(".")
+            video_exts = {"mp4", "mkv", "webm", "mov", "avi"}
+            audio_exts = {"mp3", "flac", "m4a", "wav", "ogg", "aac"}
+            media_type = "video" if ext in video_exts else ("audio" if ext in audio_exts else "unknown")
+            file_url = "file:///" + filepath.replace("\\", "/")
+            return {"ok": True, "url": file_url, "type": media_type, "title": item.get("title", ""), "thumbnail": item.get("thumbnail", "")}
+        except Exception as exc:
+            logger.error("get_file_for_preview failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def hide_to_tray(self) -> None:
+        """Hide the main window to the system tray."""
+        if self._window:
+            try:
+                self._window.hide()
+            except Exception as exc:
+                logger.error("hide_to_tray failed: %s", exc)
+
+    def show_from_tray(self) -> None:
+        """Restore the main window from the system tray."""
+        if self._window:
+            try:
+                self._window.show()
+            except Exception as exc:
+                logger.error("show_from_tray failed: %s", exc)
+
+    def force_quit(self) -> None:
+        """Force a complete application exit."""
+        self._force_quit = True
+        try:
+            self._dm.shutdown()
+            config.save()
+            if self._tray_icon:
+                self._tray_icon.stop()
+        except Exception:
+            pass
+        if self._window:
+            self._window.destroy()
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def run_system_command(self, command: str) -> dict[str, Any]:
+        """Execute a system-level power command: shutdown_init, shutdown_abort, sleep."""
+        try:
+            if command == "shutdown_init":
+                # Schedules shutdown in 60 seconds
+                subprocess.Popen(
+                    ["shutdown", "/s", "/t", "60", "/c", "Suylios Downloader: downloads complete."],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                logger.info("System shutdown scheduled in 60 seconds.")
+                return {"ok": True}
+            elif command == "shutdown_abort":
+                subprocess.Popen(
+                    ["shutdown", "/a"],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                logger.info("System shutdown aborted.")
+                return {"ok": True}
+            elif command == "sleep":
+                subprocess.Popen(
+                    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                logger.info("System sleep triggered.")
+                return {"ok": True}
+            else:
+                return {"ok": False, "error": f"Unknown command: {command}"}
+        except Exception as exc:
+            logger.error("run_system_command failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
 
     def shutdown(self) -> None:
         """Called on window close to release resources."""
@@ -487,9 +704,77 @@ class Bridge:
             logger.error("Shutdown error: %s", exc)
 
 
-# ---------------------------------------------------------------------------
-# Application entry-point
-# ---------------------------------------------------------------------------
+def _create_tray_icon(bridge) -> None:
+    """Initialize and run pystray system tray icon in background thread."""
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+
+        # Load or create tray icon
+        icon_path = Path(_resolve_ui_path()).parent / "icon.ico"
+        if icon_path.exists():
+            try:
+                img = Image.open(str(icon_path)).convert("RGBA").resize((32, 32))
+            except Exception:
+                img = None
+        else:
+            img = None
+
+        if img is None:
+            # Generate a simple purple-cyan "S" icon
+            img = Image.new("RGBA", (32, 32), (18, 18, 28, 255))
+            draw = ImageDraw.Draw(img)
+            draw.ellipse([2, 2, 30, 30], outline=(0, 240, 255), width=2)
+            draw.text((9, 6), "S", fill=(168, 85, 247))
+
+        def _show_window(icon, item):
+            if bridge._window:
+                bridge._window.show()
+                bridge._window.restore()
+
+        def _quit_app(icon, item):
+            bridge.force_quit()
+            icon.stop()
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Suylios", _show_window, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", _quit_app),
+        )
+
+        tray = pystray.Icon("suylios", img, f"{APP_NAME}", menu)
+        bridge._tray_icon = tray
+        logger.info("System tray icon started.")
+        tray.run()
+    except Exception as exc:
+        logger.warning("System tray not available: %s", exc)
+
+
+def _scheduler_and_shutdown_loop(bridge) -> None:
+    """Background daemon loop: checks scheduled tasks and auto-shutdown trigger."""
+    import time
+    while not bridge._force_quit:
+        try:
+            bridge._dm.check_scheduled_tasks()
+
+            # Auto-shutdown check: if mode is set and no active downloads
+            if bridge._auto_shutdown_mode:
+                active = bridge._dm.get_active_count()
+                if active == 0:
+                    mode = bridge._auto_shutdown_mode
+                    bridge._auto_shutdown_mode = ""
+                    logger.info("Auto-shutdown triggered: %s", mode)
+                    try:
+                        if bridge._window:
+                            bridge._window.evaluate_js(
+                                f"window._triggerAutoShutdown && window._triggerAutoShutdown('{mode}')"
+                            )
+                    except Exception:
+                        pass
+                    # Actual OS command executed from JS after user confirmation countdown
+        except Exception as exc:
+            logger.warning("Scheduler loop error: %s", exc)
+        time.sleep(5)
 
 
 def main() -> None:
@@ -503,6 +788,14 @@ def main() -> None:
     ui_path = _resolve_ui_path()
     logger.info("UI path: %s", ui_path)
 
+    # Start scheduler / auto-shutdown background loop
+    sched_thread = threading.Thread(target=_scheduler_and_shutdown_loop, args=(bridge,), daemon=True, name="scheduler")
+    sched_thread.start()
+
+    # Start system tray icon (background thread)
+    tray_thread = threading.Thread(target=_create_tray_icon, args=(bridge,), daemon=True, name="tray")
+    tray_thread.start()
+
     # Determine if we should load a URL (dev server) or a file
     if os.environ.get("SUYLIOS_DEV_URL"):
         url = os.environ["SUYLIOS_DEV_URL"]
@@ -510,7 +803,6 @@ def main() -> None:
     elif Path(ui_path).is_file():
         url = f"file:///{ui_path.replace(os.sep, '/')}"
     else:
-        # Fallback: show a minimal page
         url = "data:text/html,<h1>Suylios Downloader</h1><p>UI files not found.</p>"
 
     window = webview.create_window(
@@ -542,9 +834,32 @@ def main() -> None:
 
     window.events.loaded += _on_ready  # type: ignore[attr-defined]
 
-    # Register close handler
-    def _on_closing() -> None:
+    def _on_closing() -> bool:
+        """Intercept close: minimize to tray if background_mode is enabled, else quit."""
+        if bridge._force_quit:
+            bridge.shutdown()
+            return True  # Actually close
+
+        background_mode = config.get("background_mode", True)
+        active = bridge._dm.get_active_count()
+        scheduled = sum(1 for t in bridge._dm.get_all_tasks() if t.get("scheduled_at", 0) > 0)
+
+        if background_mode or active > 0 or scheduled > 0:
+            try:
+                window.hide()
+                if getattr(bridge, "_first_tray_notify", True):
+                    bridge._first_tray_notify = False
+                    if hasattr(bridge, "_tray_icon") and bridge._tray_icon:
+                        bridge._tray_icon.notify(
+                            "Suylios Downloader arka planda çalışmaya devam ediyor. Açmak veya kapatmak için gizli simgelere göz atın.",
+                            "Uygulama Arka Plana Taşındı"
+                        )
+            except Exception as exc:
+                logger.error("hide window error: %s", exc)
+            return False  # Don't actually close
+
         bridge.shutdown()
+        return True
 
     window.events.closing += _on_closing  # type: ignore[attr-defined]
 

@@ -63,6 +63,7 @@ class PixeldrainExtractor(BaseExtractor):
         output_path: str,
         format_id: str = "best",
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        **kwargs: Any,
     ) -> str:
         kind, item_id = self._parse_url(url)
 

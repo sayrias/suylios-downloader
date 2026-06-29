@@ -35,10 +35,14 @@
     dom.pageMain = $('#page-main');
     dom.pageSettings = $('#page-settings');
     dom.pageHistory = $('#page-history');
+    dom.pageScheduled = $('#page-scheduled');
 
     dom.clipboardBanner = $('#clipboard-banner');
     dom.historyList = $('#history-list');
     dom.historyEmpty = $('#history-empty');
+    dom.scheduledList = $('#scheduled-list');
+    dom.scheduledEmpty = $('#scheduled-empty');
+    dom.scheduledBadge = $('#scheduled-badge');
     dom.btnClearHistory = $('#btn-clear-history');
 
     dom.urlInput = $('#url-input');
@@ -173,6 +177,13 @@
       if (e.target.closest('button')) return;
       callApi('maximize_window');
     });
+
+    // Wire shutdown modal from settings page
+    document.addEventListener('click', (e) => {
+      if (e.target?.closest('#btn-open-shutdown-modal')) {
+        $('#shutdown-modal')?.classList.remove('hidden');
+      }
+    });
   }
 
   // ─── PAGE NAVIGATION ───
@@ -195,7 +206,7 @@
   }
 
   function switchPage(page) {
-    const pages = { main: dom.pageMain, settings: dom.pageSettings, history: dom.pageHistory };
+    const pages = { main: dom.pageMain, settings: dom.pageSettings, history: dom.pageHistory, scheduled: dom.pageScheduled };
     const currentEl = pages[state.currentPage];
     const targetEl = pages[page];
     if (!currentEl || !targetEl) return;
@@ -217,6 +228,8 @@
     state.currentPage = page;
     if (page === 'history') {
       renderHistory();
+    } else if (page === 'scheduled') {
+      toggleScheduledEmptyState();
     }
   }
 
@@ -232,11 +245,18 @@
     });
 
     dom.btnPaste?.addEventListener('click', async () => {
-      const text = await getClipboardText();
+      let text = await getClipboardText();
+      if (!text && dom.urlInput) {
+        dom.urlInput.focus();
+        try { document.execCommand('paste'); text = dom.urlInput.value; } catch(e) {}
+      }
       if (text) {
         dom.urlInput.value = text;
         dom.urlInput.focus();
         flashUrlBar();
+      } else {
+        const lang = window.CURRENT_LANG;
+        showToast(lang === 'en' ? '⚠️ Clipboard is empty or inaccessible' : '⚠️ Pano boş veya erişilemedi', 'warning');
       }
     });
   }
@@ -264,18 +284,26 @@
 
     const format = dom.formatSelect.value;
     const quality = dom.qualitySelect.value;
+    const startTime = ($('#trim-start')?.value || '').trim();
+    const endTime = ($('#trim-end')?.value || '').trim();
 
     // Disable button temporarily
     dom.btnDownload.disabled = true;
     dom.btnDownload.style.opacity = '0.6';
 
-    const result = await callApi('add_download', url, format, quality);
+    const embedMeta = $('#setting-embed-metadata')?.checked ?? true;
+    const dlSubs = $('#setting-download-subtitles')?.checked ?? false;
+    const keepOrig = $('#trim-keep-original')?.checked ?? false;
+    const result = await callApi('add_download', url, format, quality, startTime, endTime, embedMeta, dlSubs, keepOrig);
 
     dom.btnDownload.disabled = false;
     dom.btnDownload.style.opacity = '';
 
     if (result && (result.task || result.task_id || result.ok)) {
       dom.urlInput.value = '';
+      if ($('#btn-trim-clear') && !$('#btn-trim-clear').classList.contains('hidden')) {
+        $('#btn-trim-clear').click();
+      }
       showToast('İndirme eklendi', 'success');
       flashUrlBar();
       await refreshDownloads();
@@ -302,7 +330,7 @@
 
   // ─── CLIPBOARD ───
   async function getClipboardText() {
-    // Only call pywebview native bridge to avoid browser permission popups
+    // Sadece native bridge çağrılır, böylece tarayıcı izin uyarısı asla çıkmaz
     const apiText = await callApi('get_clipboard_text');
     return apiText || '';
   }
@@ -431,11 +459,18 @@
           </div>
         </div>
         <div class="history-card-actions">
+          <button class="btn-secondary btn-sm btn-preview-hist" data-id="${item.id}" title="Önizle" style="color:var(--accent-cyan); border-color:rgba(0,240,255,0.3);">▶️</button>
           <button class="btn-secondary btn-sm btn-open-hist" data-id="${item.id}" title="${openFolderText}">📁 ${openFolderText}</button>
           <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="${deleteText}" style="color:#ef4444; border-color:rgba(239,68,68,0.3);">🗑️</button>
         </div>
       `;
       
+      const previewBtn = card.querySelector('.btn-preview-hist');
+      if (previewBtn) {
+        previewBtn.addEventListener('click', () => {
+          if (window.openPreviewPlayer) window.openPreviewPlayer(item.id);
+        });
+      }
       const openBtn = card.querySelector('.btn-open-hist');
       if (openBtn) {
         openBtn.addEventListener('click', () => {
@@ -490,11 +525,25 @@
 
     updateStatusBar(downloads);
     toggleEmptyState();
+    toggleScheduledEmptyState();
   }
 
   function toggleEmptyState() {
     const hasCards = dom.downloadList.children.length > 0;
     dom.emptyState.style.display = hasCards ? 'none' : '';
+  }
+
+  function toggleScheduledEmptyState() {
+    if (!dom.scheduledList || !dom.scheduledEmpty) return;
+    const count = dom.scheduledList.children.length;
+    dom.scheduledEmpty.style.display = count > 0 ? 'none' : '';
+    if (dom.scheduledBadge) {
+      if (count > 0) {
+        dom.scheduledBadge.classList.remove('hidden');
+      } else {
+        dom.scheduledBadge.classList.add('hidden');
+      }
+    }
   }
 
   // ─── DOWNLOAD CARD CREATION ───
@@ -512,13 +561,26 @@
     // Bind actions
     bindCardActions(card, dl.id);
 
-    dom.downloadList.prepend(card);
-    toggleEmptyState();
+    const isScheduled = dl.scheduled_at && dl.scheduled_at > 0;
+    if (isScheduled && dom.scheduledList) {
+      dom.scheduledList.prepend(card);
+      toggleScheduledEmptyState();
+    } else {
+      dom.downloadList.prepend(card);
+      toggleEmptyState();
+    }
   }
 
   function updateDownloadCard(dl) {
     const card = $(`.download-card[data-task-id="${dl.id}"]`);
     if (!card) return;
+
+    const isScheduled = dl.scheduled_at && dl.scheduled_at > 0;
+    if (!isScheduled && dom.scheduledList && card.parentElement === dom.scheduledList) {
+      dom.downloadList.prepend(card);
+      toggleScheduledEmptyState();
+      toggleEmptyState();
+    }
 
     card.dataset.status = dl.status || 'downloading';
     populateCard(card, dl);
@@ -547,7 +609,13 @@
     } else {
       title.textContent = rawTitle;
     }
-    subtitle.textContent = truncateUrl(dl.url || '');
+
+    if (dl.scheduled_at && dl.scheduled_at > 0) {
+      const dtStr = new Date(dl.scheduled_at * 1000).toLocaleString();
+      subtitle.innerHTML = `<span style="color:var(--accent-purple); font-weight:700;">⏰ ${dtStr}</span> • ${escapeHtml(truncateUrl(dl.url || ''))}`;
+    } else {
+      subtitle.textContent = truncateUrl(dl.url || '');
+    }
 
     const siteIcon = card.querySelector('.card-site-icon');
     if (siteIcon && dl.thumbnail) {
@@ -569,7 +637,9 @@
       progressEta.textContent = '';
     } else {
       progressSize.textContent = formatSizeRange(dl.downloaded_size, dl.total_size);
-      if (dl.status === 'converting') {
+      if (dl.scheduled_at && dl.scheduled_at > 0) {
+        progressEta.textContent = lang === 'en' ? '⏰ Waiting for scheduled time...' : '⏰ İndirme zamanı bekleniyor...';
+      } else if (dl.status === 'converting') {
         progressEta.textContent = dl.format_type === 'mp3' ? '🎵 MP3 formatına dönüştürülüyor...' : '⚙️ Dönüştürülüyor...';
       } else if (dl.status === 'merging') {
         progressEta.textContent = '📦 Video ve ses birleştiriliyor...';
@@ -579,21 +649,26 @@
     }
 
     // Status badge
-    const statusMap = {
-      downloading: { text: 'İndiriliyor', class: 'downloading' },
-      paused:      { text: 'Duraklatıldı', class: 'paused' },
-      converting:  { text: 'Dönüştürülüyor', class: 'converting' },
-      complete:    { text: completedText, class: 'complete' },
-      completed:   { text: completedText, class: 'complete' },
-      cancelled:   { text: 'İptal Edildi', class: 'error' },
-      error:       { text: 'Hata', class: 'error' },
-      queued:      { text: 'Sırada', class: 'downloading' },
-      merging:     { text: 'Birleştiriliyor', class: 'converting' },
-    };
+    let statusInfo;
+    if (dl.scheduled_at && dl.scheduled_at > 0) {
+      statusInfo = { text: lang === 'en' ? '⏰ SCHEDULED' : '⏰ ZAMANLANDI', class: 'converting' };
+    } else {
+      const statusMap = {
+        downloading: { text: 'İndiriliyor', class: 'downloading' },
+        paused:      { text: 'Duraklatıldı', class: 'paused' },
+        converting:  { text: 'Dönüştürülüyor', class: 'converting' },
+        complete:    { text: completedText, class: 'complete' },
+        completed:   { text: completedText, class: 'complete' },
+        cancelled:   { text: 'İptal Edildi', class: 'error' },
+        error:       { text: 'Hata', class: 'error' },
+        queued:      { text: 'Sırada', class: 'downloading' },
+        merging:     { text: 'Birleştiriliyor', class: 'converting' },
+      };
+      statusInfo = statusMap[dl.status] || { text: dl.status, class: '' };
+    }
 
-    const st = statusMap[dl.status] || statusMap.downloading;
-    badge.textContent = st.text;
-    badge.className = 'status-badge ' + st.class;
+    badge.textContent = statusInfo.text;
+    badge.className = 'status-badge ' + statusInfo.class;
 
     // Update pause/resume button icon
     const pauseBtn = card.querySelector('.btn-pause');
@@ -675,7 +750,11 @@
     card.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
     card.style.opacity = '0';
     card.style.transform = 'translateX(30px) scale(0.95)';
-    setTimeout(() => card.remove(), 300);
+    setTimeout(() => {
+      card.remove();
+      toggleEmptyState();
+      toggleScheduledEmptyState();
+    }, 300);
   }
 
   // ─── DEMO DOWNLOAD (for UI testing without backend) ───
@@ -901,16 +980,7 @@
 
   async function loadLocaleDictionary(lang) {
     if (lang === 'tr') return;
-    try {
-      const cached = localStorage.getItem('suylios_locale_' + lang);
-      if (cached) {
-        const dict = JSON.parse(cached);
-        TR_TO_EN = dict;
-        EN_TO_TR = {};
-        for (const [k, v] of Object.entries(dict)) EN_TO_TR[v] = k;
-      }
-    } catch(e) {}
-
+    try { localStorage.removeItem('suylios_locale_en'); localStorage.removeItem('suylios_locale_tr'); } catch(e) {}
     let dict = null;
     if (getApi()) {
       dict = await callApi('get_locale', lang);
@@ -955,9 +1025,19 @@
 
     // Specifically handle buttons with icons like Download / Clear History
     const btnDl = $('#btn-download span'); if (btnDl) btnDl.textContent = lang === 'en' ? 'Download' : 'İndir';
+    const btnBatch = $('#btn-batch span'); if (btnBatch) btnBatch.textContent = lang === 'en' ? 'Batch' : 'Toplu';
+    const btnSched = $('#btn-schedule span'); if (btnSched) btnSched.textContent = lang === 'en' ? 'Schedule' : 'Zamanla';
+    const btnSchedConf = $('#btn-schedule-confirm span'); if (btnSchedConf) btnSchedConf.textContent = lang === 'en' ? 'Schedule' : 'Zamanla';
     const btnClip = $('#btn-clipboard-download'); if (btnClip) btnClip.textContent = lang === 'en' ? 'One-Click Download' : 'Tek Tıkla İndir';
+    const clipLbl = $('#clipboard-label-text'); if (clipLbl) clipLbl.textContent = lang === 'en' ? 'New link detected in clipboard: ' : 'Panoda yeni link algılandı: ';
+    const emptyTitle = $('#empty-state-title'); if (emptyTitle) emptyTitle.textContent = lang === 'en' ? 'Ready to Download' : 'İndirmeye Hazır';
+    const emptyDesc = $('#empty-state-desc'); if (emptyDesc) emptyDesc.innerHTML = lang === 'en' ? 'Paste a URL or press <kbd>Ctrl</kbd> + <kbd>V</kbd> to start downloading' : 'URL yapıştırarak veya <kbd>Ctrl</kbd> + <kbd>V</kbd> basarak indirmeye başla';
     const btnHist = $('#btn-clear-history'); if (btnHist) btnHist.textContent = lang === 'en' ? 'Clear History' : 'Geçmişi Temizle';
     const spin = $('.loading-spinner span'); if (spin) spin.textContent = lang === 'en' ? 'Connecting...' : 'Bağlanıyor...';
+    const trimLbl = $('#trim-label-text'); if (trimLbl) trimLbl.textContent = lang === 'en' ? 'Time Range:' : 'Zaman Aralığı:';
+    const trimBtn = $('#trim-btn-text'); if (trimBtn && !window.TRIM_ACTIVE) trimBtn.textContent = lang === 'en' ? 'Trim' : 'Kes';
+    if (trimBtn && window.TRIM_ACTIVE) trimBtn.textContent = lang === 'en' ? '✓ Trimmed' : '✓ Kesildi';
+    const schedNav = $('button[data-page="scheduled"]'); if (schedNav) schedNav.title = lang === 'en' ? 'Scheduled Downloads' : 'Zamanlanmış İndirmeler';
 
     // Placeholders & Readonly Values
     $$('input[placeholder]').forEach(inp => {
@@ -976,6 +1056,54 @@
       if (btn.dataset.page === 'settings') btn.title = lang === 'en' ? 'Settings' : 'Ayarlar';
     });
 
+    // Shutdown Modal & Filter Button Tooltip
+    const sdTitle = $('#shutdown-modal-title'); if (sdTitle) sdTitle.textContent = lang === 'en' ? 'When Download Completes' : 'İndirme Bitince';
+    const sdDesc = $('#shutdown-modal-desc'); if (sdDesc) sdDesc.textContent = lang === 'en' ? 'What should be done to the PC when all active downloads complete?' : 'Tüm aktif indirmeler tamamlandığında bilgisayara ne yapılsın?';
+    const sdCancel = $('#btn-shutdown-cancel'); if (sdCancel) sdCancel.textContent = lang === 'en' ? 'Cancel' : 'İptal';
+    const sdConfirm = $('#btn-shutdown-confirm'); if (sdConfirm) sdConfirm.textContent = lang === 'en' ? '✓ Apply' : '✓ Uygula';
+    const btnOpenSd = $('#btn-open-shutdown-modal'); if (btnOpenSd) btnOpenSd.textContent = lang === 'en' ? '⏰ Configure' : '⏰ Ayarla';
+    const btnShowOpt = $('#btn-show-options'); if (btnShowOpt) btnShowOpt.title = lang === 'en' ? 'Filter & Download Options' : 'Filtre & İndirme Seçenekleri';
+    const pasteBtnEl = $('#btn-paste'); if (pasteBtnEl) pasteBtnEl.title = lang === 'en' ? 'Paste' : 'Yapıştır';
+    const trimBtnEl = $('#btn-show-trim'); if (trimBtnEl) trimBtnEl.title = lang === 'en' ? 'Trim Video' : 'Zaman Aralığı ile Kes';
+    const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
+    const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
+    const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.2.0' : 'Sürüm 1.2.0';
+    const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
+    const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
+    const schedDtLbl = $('#schedule-datetime-label'); if (schedDtLbl) schedDtLbl.textContent = lang === 'en' ? 'Date & Time' : 'Tarih & Saat';
+    const dtBtnTxt = $('#dt-picker-btn-text'); if (dtBtnTxt) dtBtnTxt.textContent = lang === 'en' ? 'Change' : 'Değiştir';
+    const dtModalTitle = $('#dt-picker-modal-title'); if (dtModalTitle) dtModalTitle.textContent = lang === 'en' ? 'Select Date & Time' : 'Tarih & Saat Seçimi';
+    const dtTimeLbl = $('#dt-time-label'); if (dtTimeLbl) dtTimeLbl.textContent = lang === 'en' ? 'Time Selection' : 'Saat Seçimi';
+    const dtConfirmTxt = $('#dt-confirm-text'); if (dtConfirmTxt) dtConfirmTxt.textContent = lang === 'en' ? 'Select' : 'Seç';
+    const dtCancelBtn = $('#btn-dt-picker-cancel'); if (dtCancelBtn) dtCancelBtn.textContent = lang === 'en' ? 'Cancel' : 'İptal';
+    
+    const daysHeader = $('#cal-days-header');
+    if (daysHeader) {
+      daysHeader.innerHTML = lang === 'en' 
+        ? '<span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>'
+        : '<span>Pt</span><span>Sa</span><span>Ça</span><span>Pe</span><span>Cu</span><span>Ct</span><span>Pz</span>';
+    }
+    if (typeof renderCalendarGrid === 'function') renderCalendarGrid();
+    if (typeof updateScheduleDisplayText === 'function') updateScheduleDisplayText();
+
+    $$('.shutdown-option-card').forEach((card, idx) => {
+      const titles = lang === 'en' ? ['❌ Do nothing', '💤 Put to Sleep', '⚡ Shutdown PC'] : ['❌ Hiçbir şey yapma', '💤 Uyku Moduna Al', '⚡ Bilgisayarı Kapat'];
+      const descs = lang === 'en' ? [
+        'App continues running normally when downloads complete.',
+        'Windows enters sleep mode. Your session is preserved.',
+        '60-second countdown begins. Can be cancelled via abort command.'
+      ] : [
+        'İndirmeler bitince uygulama normal çalışmaya devam eder.',
+        'Windows uyku moduna alınır. Oturumunuz korunur.',
+        '60 saniye geri sayım başlar. Abort komutu ile iptal edebilirsiniz.'
+      ];
+      const tDiv = card.querySelector('div > div:nth-child(1)');
+      const dDiv = card.querySelector('div > div:nth-child(2)');
+      if (tDiv && titles[idx]) tDiv.textContent = titles[idx];
+      if (dDiv && descs[idx]) dDiv.textContent = descs[idx];
+    });
+
     // Refresh Dynamic Quality Dropdowns
     if (typeof updateDynamicQualityOptions === 'function') {
       const fmtSelect = document.getElementById('format-select');
@@ -983,10 +1111,15 @@
     }
     $$('.cyber-dropdown').forEach(custom => {
       const select = custom.parentElement?.querySelector('select');
-      if (select && select.selectedIndex >= 0) {
-        const textSpan = custom.querySelector('.cyber-dropdown-text');
-        const optText = select.options[select.selectedIndex]?.text;
-        if (textSpan && optText) textSpan.textContent = map[optText] || optText;
+      if (select) {
+        Array.from(select.options).forEach((opt, idx) => {
+          const item = custom.querySelectorAll('.cyber-dropdown-item')[idx];
+          if (item) item.textContent = opt.text;
+        });
+        if (select.selectedIndex >= 0) {
+          const textSpan = custom.querySelector('.cyber-dropdown-text');
+          if (textSpan) textSpan.textContent = select.options[select.selectedIndex]?.text;
+        }
       }
     });
 
@@ -1011,6 +1144,22 @@
     if (settings.clipboard_monitor !== undefined) {
       const el = $('#setting-clipboard-monitor');
       if (el) el.checked = settings.clipboard_monitor;
+    }
+    if (settings.auto_start_windows !== undefined) {
+      const el = $('#setting-auto-start-windows');
+      if (el) el.checked = settings.auto_start_windows;
+    }
+    if (settings.background_mode !== undefined) {
+      const el = $('#setting-background-mode');
+      if (el) el.checked = settings.background_mode;
+    }
+    if (settings.embed_metadata !== undefined) {
+      const el = $('#setting-embed-metadata');
+      if (el) el.checked = settings.embed_metadata;
+    }
+    if (settings.download_subtitles !== undefined) {
+      const el = $('#setting-download-subtitles');
+      if (el) el.checked = settings.download_subtitles;
     }
     if (settings.download_path) {
       dom.settingDownloadPath.value = settings.download_path;
@@ -1067,6 +1216,10 @@
       language: $('#setting-language')?.value || 'tr',
       start_minimized: $('#setting-start-minimized')?.checked || false,
       clipboard_monitor: $('#setting-clipboard-monitor')?.checked ?? true,
+      auto_start_windows: $('#setting-auto-start-windows')?.checked ?? false,
+      background_mode: $('#setting-background-mode')?.checked ?? true,
+      embed_metadata: $('#setting-embed-metadata')?.checked ?? true,
+      download_subtitles: $('#setting-download-subtitles')?.checked ?? false,
       download_path: dom.settingDownloadPath?.value || '',
       subfolders: $('#setting-subfolders')?.checked ?? true,
       filename_template: $('#setting-filename-template')?.value || '%(title)s.%(ext)s',
@@ -1459,4 +1612,653 @@
   } else {
     init();
   }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ BATCH DOWNLOAD MODAL
+  // ═══════════════════════════════════════════════════════
+  function initBatchModal() {
+    const modal = $('#batch-modal');
+    const btnOpen = $('#btn-batch');
+    const btnClose = $('#btn-close-batch');
+    const btnCancel = $('#btn-batch-cancel');
+    const btnStart = $('#btn-batch-start');
+
+    if (!modal || !btnOpen) return;
+
+    btnOpen.addEventListener('click', () => modal.classList.remove('hidden'));
+    const closeModal = () => modal.classList.add('hidden');
+    btnClose?.addEventListener('click', closeModal);
+    btnCancel?.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    const txtInput = $('#batch-txt-input');
+    txtInput?.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const content = evt.target?.result || '';
+        const textarea = $('#batch-urls');
+        if (textarea) {
+          const existing = textarea.value.trim();
+          textarea.value = existing ? `${existing}\n${content.trim()}` : content.trim();
+          showToast('TXT içeriği eklendi', 'success');
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = ''; // Reset so same file can be picked again
+    });
+
+    btnStart?.addEventListener('click', async () => {
+      const textarea = $('#batch-urls');
+      const urlsText = textarea?.value?.trim() || '';
+      if (!urlsText) { showToast('URL giriniz', 'error'); return; }
+
+      const format = $('#batch-format-select')?.value || 'auto';
+      const quality = $('#batch-quality-select')?.value || 'best';
+
+      btnStart.disabled = true;
+      btnStart.innerHTML = '⏳ <span>Ekleniyor...</span>';
+      const result = await callApi('add_batch_downloads', urlsText, format, quality);
+      btnStart.disabled = false;
+      btnStart.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span>Tümünü Sıraya Ekle</span>';
+
+      if (result?.ok) {
+        closeModal();
+        if (textarea) textarea.value = '';
+        const lang = window.CURRENT_LANG;
+        showToast(`${result.count} ${lang === 'en' ? 'downloads added' : 'indirme eklendi'}`, 'success');
+      } else {
+        showToast(result?.error || 'Hata', 'error');
+      }
+    });
+  }
+
+  let pickerTargetDate = new Date();
+  pickerTargetDate.setMinutes(pickerTargetDate.getMinutes() + 5);
+  let calViewMonth = pickerTargetDate.getMonth();
+  let calViewYear = pickerTargetDate.getFullYear();
+
+  function updateScheduleDisplayText() {
+    const dispInp = $('#schedule-display-input');
+    const hiddenInp = $('#schedule-datetime');
+    if (!dispInp || !hiddenInp || !hiddenInp.value) return;
+    const parts = hiddenInp.value.split('T');
+    if (parts.length !== 2) return;
+    const dateParts = parts[0].split('-');
+    if (dateParts.length !== 3) return;
+    dispInp.value = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]} ${parts[1]}`;
+  }
+  window.updateScheduleDisplayText = updateScheduleDisplayText;
+
+  function parseInputToTargetDate(str) {
+    if (!str) return null;
+    str = str.trim();
+    let dStr = str, tStr = "00:00";
+    if (str.includes(' ')) {
+      const p = str.split(' ');
+      dStr = p[0]; tStr = p[1];
+    } else if (str.includes('T')) {
+      const p = str.split('T');
+      dStr = p[0]; tStr = p[1];
+    }
+    let y = 0, m = 0, d = 0;
+    if (dStr.includes('.')) {
+      const dp = dStr.split('.');
+      if (dp.length === 3) { d = parseInt(dp[0], 10); m = parseInt(dp[1], 10) - 1; y = parseInt(dp[2], 10); }
+    } else if (dStr.includes('-')) {
+      const dp = dStr.split('-');
+      if (dp.length === 3) { y = parseInt(dp[0], 10); m = parseInt(dp[1], 10) - 1; d = parseInt(dp[2], 10); }
+    }
+    const tp = (tStr || "").split(':');
+    let h = 0, min = 0;
+    if (tp.length >= 2) { h = parseInt(tp[0], 10); min = parseInt(tp[1], 10); }
+    if (!isNaN(y) && y > 2000 && !isNaN(m) && m >= 0 && m <= 11 && !isNaN(d) && d >= 1 && d <= 31) {
+      return new Date(y, m, d, h || 0, min || 0);
+    }
+    return null;
+  }
+
+  function renderCalendarGrid() {
+    const grid = $('#cal-days-grid');
+    const myStr = $('#cal-month-year-str');
+    if (!grid || !myStr) return;
+    const lang = window.CURRENT_LANG || 'tr';
+    const monthsTr = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    const monthsEn = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    myStr.textContent = `${lang === 'en' ? monthsEn[calViewMonth] : monthsTr[calViewMonth]} ${calViewYear}`;
+
+    grid.innerHTML = '';
+    const firstDay = new Date(calViewYear, calViewMonth, 1).getDay();
+    let emptyCount = firstDay === 0 ? 6 : firstDay - 1;
+    for (let i = 0; i < emptyCount; i++) {
+      const span = document.createElement('div');
+      span.className = 'cal-day-cell empty';
+      grid.appendChild(span);
+    }
+    const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const cell = document.createElement('div');
+      cell.className = 'cal-day-cell';
+      cell.textContent = d;
+      if (calViewYear === pickerTargetDate.getFullYear() && calViewMonth === pickerTargetDate.getMonth() && d === pickerTargetDate.getDate()) {
+        cell.classList.add('selected');
+      }
+      cell.addEventListener('click', () => {
+        pickerTargetDate.setFullYear(calViewYear, calViewMonth, d);
+        syncPickerToHidden();
+        renderCalendarGrid();
+      });
+      grid.appendChild(cell);
+    }
+  }
+  window.renderCalendarGrid = renderCalendarGrid;
+
+  function syncPickerToHidden() {
+    const hiddenInp = $('#schedule-datetime');
+    if (!hiddenInp) return;
+    const yyyy = pickerTargetDate.getFullYear();
+    const mm = String(pickerTargetDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(pickerTargetDate.getDate()).padStart(2, '0');
+    const hh = String(pickerTargetDate.getHours()).padStart(2, '0');
+    const mmi = String(pickerTargetDate.getMinutes()).padStart(2, '0');
+    hiddenInp.value = `${yyyy}-${mm}-${dd}T${hh}:${mmi}`;
+    updateScheduleDisplayText();
+  }
+
+  function setupDrumPicker(containerId, count, valGetter, valSetter) {
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const div = document.createElement('div');
+      div.className = 'drum-item';
+      div.textContent = i < 10 ? '0' + i : i;
+      div.addEventListener('click', () => {
+        valSetter(i);
+        syncPickerToHidden();
+        updateDrumSelections();
+      });
+      container.appendChild(div);
+    }
+
+    let isDragging = false, startY, startScrollTop;
+    container.addEventListener('mousedown', e => { isDragging = true; startY = e.pageY; startScrollTop = container.scrollTop; container.style.cursor = 'grabbing'; });
+    window.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; container.style.cursor = 'grab'; snapDrum(); } });
+    window.addEventListener('mousemove', e => { if (!isDragging) return; e.preventDefault(); container.scrollTop = startScrollTop - (e.pageY - startY); });
+
+    let scrollTimeout;
+    container.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(snapDrum, 120);
+    });
+
+    function snapDrum() {
+      const idx = Math.round(container.scrollTop / 36);
+      const clamped = Math.max(0, Math.min(count - 1, idx));
+      if (valGetter() !== clamped) {
+        valSetter(clamped);
+        syncPickerToHidden();
+      }
+      updateDrumSelections();
+    }
+  }
+
+  function updateDrumSelections() {
+    ['#drum-hour', '#drum-minute'].forEach((id, isMin) => {
+      const c = $(id); if (!c) return;
+      const val = isMin ? pickerTargetDate.getMinutes() : pickerTargetDate.getHours();
+      Array.from(c.children).forEach((el, idx) => {
+        el.classList.toggle('selected', idx === val);
+      });
+      if (Math.abs(c.scrollTop - val * 36) > 2) {
+        c.scrollTo({ top: val * 36, behavior: 'smooth' });
+      }
+    });
+  }
+
+  function populateCustomDateFields(lang, targetDate = null) {
+    if (targetDate) {
+      pickerTargetDate = new Date(targetDate.getTime());
+      calViewMonth = pickerTargetDate.getMonth();
+      calViewYear = pickerTargetDate.getFullYear();
+    }
+    syncPickerToHidden();
+    renderCalendarGrid();
+    updateDrumSelections();
+  }
+  window.populateCustomDateFields = populateCustomDateFields;
+
+  // ─── CUSTOM CYBER DATE/TIME PICKER INIT ───
+  function initCustomDateTimePicker() {
+    const dispInp = $('#schedule-display-input');
+    if (dispInp) {
+      dispInp.addEventListener('change', () => {
+        const dt = parseInputToTargetDate(dispInp.value);
+        if (dt) {
+          pickerTargetDate = dt;
+          calViewMonth = dt.getMonth();
+          calViewYear = dt.getFullYear();
+          syncPickerToHidden();
+          renderCalendarGrid();
+          updateDrumSelections();
+        }
+      });
+    }
+
+    setupDrumPicker('#drum-hour', 24, () => pickerTargetDate.getHours(), h => pickerTargetDate.setHours(h));
+    setupDrumPicker('#drum-minute', 60, () => pickerTargetDate.getMinutes(), m => pickerTargetDate.setMinutes(m));
+
+    $('#cal-prev-month')?.addEventListener('click', () => { calViewMonth--; if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; } renderCalendarGrid(); });
+    $('#cal-next-month')?.addEventListener('click', () => { calViewMonth++; if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; } renderCalendarGrid(); });
+
+    const btnOpenPicker = $('#btn-open-dt-picker');
+    const pickerModal = $('#dt-picker-modal');
+    const btnClosePicker = $('#btn-close-dt-picker');
+    const btnCancelPicker = $('#btn-dt-picker-cancel');
+    const btnConfirmPicker = $('#btn-dt-picker-confirm');
+
+    if (btnOpenPicker && pickerModal) {
+      btnOpenPicker.addEventListener('click', () => {
+        const dt = parseInputToTargetDate($('#schedule-display-input')?.value);
+        if (dt) { pickerTargetDate = dt; calViewMonth = dt.getMonth(); calViewYear = dt.getFullYear(); syncPickerToHidden(); }
+        renderCalendarGrid();
+        updateDrumSelections();
+        pickerModal.classList.remove('hidden');
+      });
+      const closePicker = () => pickerModal.classList.add('hidden');
+      btnClosePicker?.addEventListener('click', closePicker);
+      btnCancelPicker?.addEventListener('click', closePicker);
+      btnConfirmPicker?.addEventListener('click', () => {
+        syncPickerToHidden();
+        closePicker();
+      });
+      pickerModal.addEventListener('click', e => { if (e.target === pickerModal) closePicker(); });
+    }
+
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 5);
+    populateCustomDateFields(window.CURRENT_LANG || 'tr', now);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ SCHEDULED DOWNLOAD MODAL
+  // ═══════════════════════════════════════════════════════
+  function initScheduleModal() {
+    const modal = $('#schedule-modal');
+    const btnOpen = $('#btn-schedule');
+    const btnClose = $('#btn-close-schedule');
+    const btnCancel = $('#btn-schedule-cancel');
+    const btnConfirm = $('#btn-schedule-confirm');
+
+    if (!modal || !btnOpen) return;
+
+    btnOpen.addEventListener('click', () => {
+      const urlInput = $('#url-input');
+      const schedUrl = $('#schedule-url');
+      if (schedUrl && urlInput?.value) schedUrl.value = urlInput.value;
+      const now = new Date();
+      now.setMinutes(now.getMinutes() + 5);
+      if (typeof populateCustomDateFields === 'function') populateCustomDateFields(window.CURRENT_LANG || 'tr', now);
+      modal.classList.remove('hidden');
+    });
+
+    const closeModal = () => modal.classList.add('hidden');
+    btnClose?.addEventListener('click', closeModal);
+    btnCancel?.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    btnConfirm?.addEventListener('click', async () => {
+      const lang = window.CURRENT_LANG || 'tr';
+      const url = $('#schedule-url')?.value?.trim();
+      const dtVal = $('#schedule-datetime')?.value;
+      if (!url) { showToast(lang === 'en' ? 'Please enter URL' : 'URL giriniz', 'error'); return; }
+      if (!dtVal) { showToast(lang === 'en' ? 'Please select date & time' : 'Tarih ve saat seçiniz', 'error'); return; }
+
+      const scheduledAt = Math.floor(new Date(dtVal).getTime() / 1000);
+      if (scheduledAt <= Math.floor(Date.now() / 1000)) {
+        showToast(lang === 'en' ? 'Selected date is in the past' : 'Geçmiş bir tarih seçtiniz', 'error'); return;
+      }
+
+      const format = $('#schedule-format-select')?.value || 'auto';
+      const quality = $('#schedule-quality-select')?.value || 'best';
+
+      btnConfirm.disabled = true;
+      const result = await callApi('schedule_download', url, format, quality, scheduledAt);
+      btnConfirm.disabled = false;
+
+      if (result?.ok) {
+        closeModal();
+        if ($('#schedule-url')) $('#schedule-url').value = '';
+        if ($('#schedule-datetime')) $('#schedule-datetime').value = '';
+        if ($('#url-input')) $('#url-input').value = '';
+
+        const dt = new Date(dtVal).toLocaleString();
+        const lang = window.CURRENT_LANG || 'tr';
+        showToast(`${lang === 'en' ? 'Scheduled for:' : 'Zamanlandı:'} ${dt}`, 'success');
+        await refreshDownloads();
+
+        const targetBtn = document.querySelector('button[data-page="scheduled"]');
+        if (targetBtn) {
+          const targetRect = targetBtn.getBoundingClientRect();
+          const flyer = document.createElement('div');
+          flyer.className = 'glass-panel';
+          flyer.style.cssText = `
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(1);
+            background: linear-gradient(135deg, rgba(168,85,247,0.9), rgba(124,58,237,0.9));
+            color: #fff; padding: 10px 18px; border-radius: 20px; font-weight: 700; font-size: 13px;
+            box-shadow: 0 0 20px rgba(168,85,247,0.6); z-index: 999999; pointer-events: none;
+            transition: all 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+          `;
+          flyer.innerHTML = `⏰ ${lang === 'en' ? 'Scheduled' : 'Zamanlandı'}`;
+          document.body.appendChild(flyer);
+
+          setTimeout(() => {
+            const flyerRect = flyer.getBoundingClientRect();
+            const deltaX = targetRect.left + (targetRect.width/2) - (flyerRect.left + flyerRect.width/2);
+            const deltaY = targetRect.top + (targetRect.height/2) - (flyerRect.top + flyerRect.height/2);
+            flyer.style.transform = `translate(calc(-50% + ${deltaX}px), calc(-50% + ${deltaY}px)) scale(0.2)`;
+            flyer.style.opacity = '0';
+          }, 50);
+
+          setTimeout(() => { if (flyer.parentElement) flyer.remove(); }, 700);
+        }
+      } else {
+        showToast(result?.error || 'Hata', 'error');
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ TRIM ROW TOGGLE
+  // ═══════════════════════════════════════════════════════
+  function initTrimRow() {
+    const urlInputSection = $('.url-input-container');
+    if (!urlInputSection) return;
+
+    const btnTrimToggle = document.createElement('button');
+    btnTrimToggle.id = 'btn-show-trim';
+    btnTrimToggle.title = 'Zaman Aralığı ile Kes';
+    btnTrimToggle.className = 'url-action-btn';
+    btnTrimToggle.innerHTML = '⏱️';
+    btnTrimToggle.style.cssText = 'font-size:15px; padding: 0 8px;';
+
+    const pasteBtn = $('#btn-paste');
+    if (pasteBtn) pasteBtn.insertAdjacentElement('afterend', btnTrimToggle);
+
+    const trimRow = $('#trim-row');
+    btnTrimToggle.addEventListener('click', () => {
+      trimRow?.classList.toggle('hidden');
+      btnTrimToggle.style.color = (trimRow?.classList.contains('hidden') && !window.TRIM_ACTIVE) ? '' : 'var(--accent-cyan)';
+    });
+
+    function timeToSec(str) {
+      if (!str) return 0;
+      const parts = str.split(':').map(x => parseInt(x || '0', 10));
+      if (parts.length === 1) return parts[0] || 0;
+      if (parts.length === 2) return (parts[0] || 0) * 60 + (parts[1] || 0);
+      if (parts.length >= 3) return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
+      return 0;
+    }
+
+    function secToTime(totalSec) {
+      if (!totalSec || totalSec <= 0 || isNaN(totalSec)) return '';
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      if (h > 0) return `${h}:${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
+      return `${m}:${s < 10 ? '0' + s : s}`;
+    }
+
+    function smartFormatInput(inp) {
+      if (!inp || !inp.value) return;
+      const val = inp.value.trim();
+      if (!val) return;
+      const sec = timeToSec(val);
+      if (sec > 0) inp.value = secToTime(sec);
+    }
+
+    const startInp = $('#trim-start');
+    const endInp = $('#trim-end');
+    startInp?.addEventListener('blur', () => smartFormatInput(startInp));
+    endInp?.addEventListener('blur', () => {
+      smartFormatInput(endInp);
+      const sSec = timeToSec(startInp?.value?.trim());
+      const eSec = timeToSec(endInp?.value?.trim());
+      if (sSec > 0 && eSec > 0 && eSec <= sSec) {
+        endInp.value = secToTime(sSec + eSec);
+        const lang = window.CURRENT_LANG;
+        showToast(lang === 'en' ? `⚡ Duration (+${eSec}s) added to start time!` : `⚡ Bitişe ek süre (+${eSec} sn) başlangıca eklendi!`, 'info');
+      }
+    });
+
+    const btnShowOpt = $('#btn-show-options');
+    const optRow = $('#options-row');
+    btnShowOpt?.addEventListener('click', () => {
+      optRow?.classList.toggle('hidden');
+      btnShowOpt.style.color = optRow?.classList.contains('hidden') ? '' : 'var(--accent-cyan)';
+    });
+
+    const actionBtn = $('#btn-trim-action');
+    const clearBtn = $('#btn-trim-clear');
+
+    actionBtn?.addEventListener('click', () => {
+      smartFormatInput(startInp);
+      smartFormatInput(endInp);
+      let s = startInp?.value?.trim();
+      let e = endInp?.value?.trim();
+      const lang = window.CURRENT_LANG;
+      if (!s && !e) {
+        showToast(lang === 'en' ? 'Please enter start or end time' : 'Lütfen başlangıç veya bitiş süresi girin', 'error');
+        return;
+      }
+      const sSec = timeToSec(s);
+      let eSec = timeToSec(e);
+      if (sSec > 0 && eSec > 0 && eSec <= sSec) {
+        eSec = sSec + eSec;
+        endInp.value = secToTime(eSec);
+      } else if (eSec > 0 && eSec <= sSec) {
+        endInp.value = secToTime(sSec + 60);
+      }
+      window.TRIM_ACTIVE = true;
+      btnTrimToggle.style.color = '#10b981';
+      actionBtn.style.borderColor = '#10b981';
+      actionBtn.style.color = '#10b981';
+      const trimBtnTxt = $('#trim-btn-text');
+      if (trimBtnTxt) trimBtnTxt.textContent = lang === 'en' ? '✓ Trimmed' : '✓ Kesildi';
+      clearBtn?.classList.remove('hidden');
+      showToast(lang === 'en' ? 'Time range saved for download!' : 'Zaman aralığı indirme için kaydedildi!', 'success');
+    });
+
+    clearBtn?.addEventListener('click', () => {
+      window.TRIM_ACTIVE = false;
+      if (startInp) startInp.value = '';
+      if (endInp) endInp.value = '';
+      btnTrimToggle.style.color = trimRow?.classList.contains('hidden') ? '' : 'var(--accent-cyan)';
+      if (actionBtn) {
+        actionBtn.style.borderColor = 'rgba(0,240,255,0.4)';
+        actionBtn.style.color = 'var(--accent-cyan)';
+      }
+      const trimBtnTxt = $('#trim-btn-text');
+      const lang = window.CURRENT_LANG;
+      if (trimBtnTxt) trimBtnTxt.textContent = lang === 'en' ? 'Trim' : 'Kes';
+      clearBtn.classList.add('hidden');
+      showToast(lang === 'en' ? 'Time range cleared' : 'Zaman aralığı sıfırlandı', 'info');
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ AUTO SHUTDOWN MODAL
+  // ═══════════════════════════════════════════════════════
+  function initShutdownModal() {
+    const modal = $('#shutdown-modal');
+    const btnClose = $('#btn-close-shutdown');
+    const btnCancel = $('#btn-shutdown-cancel');
+    const btnConfirm = $('#btn-shutdown-confirm');
+
+    if (!modal) return;
+
+    const closeModal = () => modal.classList.add('hidden');
+    btnClose?.addEventListener('click', closeModal);
+    btnCancel?.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    btnConfirm?.addEventListener('click', async () => {
+      const selected = document.querySelector('input[name="shutdown-mode"]:checked');
+      const mode = selected?.value || '';
+
+      if (mode) {
+        // Show confirmation first
+        const lang = window.CURRENT_LANG;
+        const confirmMsg = mode === 'shutdown'
+          ? (lang === 'en' ? 'PC will shut down when all downloads finish. A 60-second countdown will appear. Continue?' : 'Tüm indirmeler bitince bilgisayar kapanacak. 60 saniyelik geri sayım başlayacak. Devam edilsin mi?')
+          : (lang === 'en' ? 'PC will go to sleep when all downloads finish. Continue?' : 'Tüm indirmeler bitince bilgisayar uyku moduna alınacak. Devam edilsin mi?');
+
+        showConfirmModal(
+          lang === 'en' ? 'Confirm Auto-Action' : 'İşlemi Onayla',
+          confirmMsg,
+          async () => {
+            await callApi('set_auto_shutdown', mode);
+            closeModal();
+            const label = mode === 'shutdown'
+              ? (lang === 'en' ? '⚡ Shutdown on complete' : '⚡ Bitince kapat')
+              : (lang === 'en' ? '💤 Sleep on complete' : '💤 Bitince uyu');
+            showToast(label, 'warning');
+          },
+          lang === 'en' ? 'Confirm' : 'Onayla'
+        );
+      } else {
+        await callApi('set_auto_shutdown', '');
+        closeModal();
+      }
+    });
+
+    // Global trigger from Python backend
+    window._triggerAutoShutdown = async (mode) => {
+      const overlay = $('#shutdown-countdown-overlay');
+      const countNum = $('#shutdown-countdown-num');
+      const titleEl = $('#shutdown-countdown-title');
+      const msgEl = $('#shutdown-countdown-msg');
+      const iconEl = $('#shutdown-countdown-icon');
+      if (!overlay) return;
+
+      const lang = window.CURRENT_LANG;
+      if (mode === 'sleep') {
+        if (iconEl) iconEl.textContent = '💤';
+        if (titleEl) titleEl.textContent = lang === 'en' ? 'Going to Sleep...' : 'Uyku Moduna Geçiliyor...';
+        if (msgEl) msgEl.textContent = lang === 'en' ? 'Downloads complete. Sleeping in 10 seconds.' : 'İndirmeler tamamlandı. 10 saniye sonra uyku modu.';
+        if (countNum) countNum.textContent = '10';
+        overlay.classList.remove('hidden');
+        let c = 10;
+        const iv = setInterval(async () => {
+          c--;
+          if (countNum) countNum.textContent = c;
+          if (c <= 0) {
+            clearInterval(iv);
+            overlay.classList.add('hidden');
+            await callApi('run_system_command', 'sleep');
+          }
+        }, 1000);
+        $('#btn-abort-shutdown')?.addEventListener('click', () => { clearInterval(iv); overlay.classList.add('hidden'); }, {once:true});
+      } else {
+        overlay.classList.remove('hidden');
+        let c = 60;
+        if (countNum) countNum.textContent = c;
+        await callApi('run_system_command', 'shutdown_init');
+        const iv = setInterval(() => {
+          c--;
+          if (countNum) countNum.textContent = c;
+          if (c <= 0) { clearInterval(iv); overlay.classList.add('hidden'); }
+        }, 1000);
+        $('#btn-abort-shutdown')?.addEventListener('click', async () => {
+          clearInterval(iv);
+          overlay.classList.add('hidden');
+          await callApi('run_system_command', 'shutdown_abort');
+          showToast(lang === 'en' ? 'Shutdown aborted' : 'Kapatma iptal edildi', 'success');
+        }, {once:true});
+      }
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ MEDIA PREVIEW PLAYER MODAL
+  // ═══════════════════════════════════════════════════════
+  let _currentPreviewTaskId = null;
+
+  async function openPreviewPlayer(taskId) {
+    const modal = $('#preview-modal');
+    if (!modal) return;
+
+    _currentPreviewTaskId = taskId;
+    const loadingEl = $('#preview-loading');
+    const videoEl = $('#preview-video');
+    const audioEl = $('#preview-audio');
+    const titleEl = $('#preview-title');
+    const metaEl = $('#preview-meta');
+
+    // Reset state
+    if (videoEl) { videoEl.style.display = 'none'; videoEl.src = ''; videoEl.pause?.(); }
+    if (audioEl) { audioEl.style.display = 'none'; audioEl.src = ''; audioEl.pause?.(); }
+    if (loadingEl) loadingEl.style.display = 'flex';
+    if (titleEl) titleEl.textContent = '⏳ Yükleniyor...';
+    modal.classList.remove('hidden');
+
+    const result = await callApi('get_file_for_preview', taskId);
+    if (loadingEl) loadingEl.style.display = 'none';
+
+    if (!result?.ok) {
+      if (titleEl) titleEl.textContent = '❌ Dosya bulunamadı';
+      if (metaEl) metaEl.textContent = result?.error || '';
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = result.title || '▶️ Önizleme';
+
+    if (result.type === 'video' && videoEl) {
+      videoEl.src = result.url;
+      videoEl.style.display = 'block';
+      videoEl.play().catch(() => {});
+    } else if (audioEl) {
+      audioEl.src = result.url;
+      audioEl.style.display = 'block';
+      audioEl.play().catch(() => {});
+    }
+  }
+
+  function initPreviewModal() {
+    const modal = $('#preview-modal');
+    const btnClose = $('#btn-close-preview');
+    if (!modal) return;
+
+    const closeModal = () => {
+      modal.classList.add('hidden');
+      $('#preview-video')?.pause?.();
+      $('#preview-audio')?.pause?.();
+      if ($('#preview-video')) $('#preview-video').src = '';
+      if ($('#preview-audio')) $('#preview-audio').src = '';
+    };
+
+    btnClose?.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    $('#btn-preview-open-folder')?.addEventListener('click', () => {
+      if (_currentPreviewTaskId) callApi('open_file_location', _currentPreviewTaskId);
+    });
+
+    // Expose globally so history cards can call it
+    window.openPreviewPlayer = openPreviewPlayer;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // v1.2.0 ─ INIT ALL NEW FEATURES
+  // ═══════════════════════════════════════════════════════
+  document.addEventListener('DOMContentLoaded', () => {
+    initBatchModal();
+    initCustomDateTimePicker();
+    initScheduleModal();
+    initTrimRow();
+    initShutdownModal();
+    initPreviewModal();
+  });
+
 })();

@@ -8,6 +8,8 @@ PyWebView Bridge thread and internal worker threads.
 
 import enum
 import logging
+import os
+import subprocess
 import threading
 import time
 import uuid
@@ -104,6 +106,14 @@ class DownloadTask:
     eta: int = 0                   # seconds remaining
     error_message: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # v1.2.0 – Trimming / scheduling / metadata
+    start_time: str = ""           # e.g. "01:15:00" for video trimming
+    end_time: str = ""             # e.g. "01:25:00" for video trimming
+    scheduled_at: int = 0          # Unix timestamp; 0 = start immediately
+    embed_metadata: bool = True
+    download_subtitles: bool = False
+    subtitle_langs: str = "tr,en"  # comma-separated lang codes
+    keep_original: bool = False
 
     # Internal bookkeeping (not serialised to JS).
     _cancel_event: threading.Event = field(
@@ -134,6 +144,10 @@ class DownloadTask:
             "eta": self.eta,
             "error_message": self.error_message,
             "created_at": self.created_at,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "scheduled_at": self.scheduled_at,
+            "keep_original": self.keep_original,
         }
 
 
@@ -220,17 +234,91 @@ class DownloadManager:
         url: str,
         format_type: str = "auto",
         quality: str = "best",
+        start_time: str = "",
+        end_time: str = "",
+        scheduled_at: int = 0,
+        embed_metadata: bool = True,
+        download_subtitles: bool = False,
+        subtitle_langs: str = "tr,en",
+        keep_original: bool = False,
     ) -> DownloadTask:
         """Create a new download task and submit it to the worker pool.
 
         Returns the newly created :class:`DownloadTask`.
         """
-        task = DownloadTask(url=url, format_type=format_type, quality=quality)
-        with self._lock:
-            self._tasks[task.id] = task
-        self._pool.submit(self._run_task, task)
-        logger.info("Task %s queued: %s (fmt=%s, q=%s)", task.id, url, format_type, quality)
+        task = DownloadTask(
+            url=url,
+            format_type=format_type,
+            quality=quality,
+            start_time=start_time,
+            end_time=end_time,
+            scheduled_at=scheduled_at,
+            embed_metadata=embed_metadata,
+            download_subtitles=download_subtitles,
+            subtitle_langs=subtitle_langs,
+            keep_original=keep_original,
+        )
+        if scheduled_at and scheduled_at > int(__import__('time').time()):
+            task.status = TaskStatus.QUEUED
+            with self._lock:
+                self._tasks[task.id] = task
+            self._pool.submit(self._fetch_scheduled_metadata, task)
+            logger.info("Task %s scheduled for %s: %s", task.id, scheduled_at, url)
+        else:
+            with self._lock:
+                self._tasks[task.id] = task
+            self._pool.submit(self._run_task, task)
+            logger.info("Task %s queued: %s (fmt=%s, q=%s)", task.id, url, format_type, quality)
         return task
+
+    def add_batch_tasks(
+        self,
+        urls: list[str],
+        format_type: str = "auto",
+        quality: str = "best",
+        embed_metadata: bool = True,
+        download_subtitles: bool = False,
+    ) -> list[DownloadTask]:
+        """Enqueue multiple URLs at once."""
+        tasks = []
+        for url in urls:
+            url = url.strip()
+            if url:
+                t = self.add_task(
+                    url=url,
+                    format_type=format_type,
+                    quality=quality,
+                    embed_metadata=embed_metadata,
+                    download_subtitles=download_subtitles,
+                )
+                tasks.append(t)
+        return tasks
+
+    def get_active_count(self) -> int:
+        """Return number of tasks that are actively downloading or queued."""
+        with self._lock:
+            return sum(
+                1 for t in self._tasks.values()
+                if t.status in (
+                    TaskStatus.QUEUED, TaskStatus.DOWNLOADING,
+                    TaskStatus.PAUSED, TaskStatus.CONVERTING,
+                )
+            )
+
+    def check_scheduled_tasks(self) -> None:
+        """Check if any scheduled tasks are due and start them."""
+        import time
+        now = int(time.time())
+        with self._lock:
+            due = [
+                t for t in self._tasks.values()
+                if t.scheduled_at > 0 and t.scheduled_at <= now
+                and t.status == TaskStatus.QUEUED
+            ]
+        for task in due:
+            task.scheduled_at = 0
+            self._pool.submit(self._run_task, task)
+            logger.info("Scheduled task %s starting now.", task.id)
 
     def pause_task(self, task_id: str) -> bool:
         """Pause a running download.  Returns ``True`` on success."""
@@ -307,6 +395,26 @@ class DownloadManager:
     def _get(self, task_id: str) -> Optional[DownloadTask]:
         with self._lock:
             return self._tasks.get(task_id)
+
+    def _fetch_scheduled_metadata(self, task: DownloadTask) -> None:
+        """Fetch metadata in background for scheduled task without downloading."""
+        try:
+            logger.info("Task %s – fetching metadata for scheduled item…", task.id)
+            extractor = _get_extractor(task.url)
+            extractor._task_quality = task.quality
+            extractor._task_url = task.url
+            extractor._site_settings = config.get("site_settings", {})
+            info = extractor.extract_info(task.url)
+            if info:
+                t = info.get("title")
+                thumb = info.get("thumbnail")
+                if t and t != task.url:
+                    task.title = t
+                if thumb:
+                    task.thumbnail = thumb
+                logger.info("Task %s – scheduled metadata OK: %s", task.id, repr(task.title)[:80])
+        except Exception as exc:
+            logger.warning("Task %s – scheduled metadata fetch error: %s", task.id, exc)
 
     def _run_task(self, task: DownloadTask) -> None:
         """Worker entry-point executed inside the thread pool."""
@@ -473,10 +581,75 @@ class DownloadManager:
                     output_path=dl_dir,
                     format_id=task.format_type,
                     progress_hook=_progress_hook,
+                    start_time=task.start_time,
+                    end_time=task.end_time,
+                    embed_metadata=task.embed_metadata,
+                    download_subtitles=task.download_subtitles,
+                    subtitle_langs=task.subtitle_langs,
+                    keep_original=task.keep_original,
                 )
                 if task._cancel_event.is_set():
                     task.status = TaskStatus.CANCELLED
                     return
+
+                if (task.start_time or task.end_time) and result_path and os.path.isfile(result_path):
+                    if not extractor.__class__.__name__.startswith("YtDlp") or task.keep_original:
+                        task.status = TaskStatus.CONVERTING
+                        logger.info("Trimming file %s from %s to %s", result_path, task.start_time, task.end_time)
+                        try:
+                            def _p_time(val: str) -> float:
+                                if not val: return 0.0
+                                parts = str(val).strip().split(":")
+                                try:
+                                    if len(parts) == 1: return float(parts[0])
+                                    elif len(parts) == 2: return float(parts[0]) * 60.0 + float(parts[1])
+                                    elif len(parts) >= 3: return float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+                                except Exception: return 0.0
+                                return 0.0
+                            s_sec = _p_time(task.start_time)
+                            e_sec = _p_time(task.end_time)
+                            if e_sec > 0 and e_sec <= s_sec:
+                                e_sec = s_sec + e_sec
+                            dur_sec = e_sec - s_sec if e_sec > s_sec else 0
+
+                            temp_out = result_path + ".trimmed" + os.path.splitext(result_path)[1]
+                            cmd = [config.get_ffmpeg_path(), "-y"]
+                            if s_sec > 0:
+                                cmd.extend(["-ss", str(s_sec)])
+                            cmd.extend(["-i", result_path])
+                            if dur_sec > 0:
+                                cmd.extend(["-t", str(dur_sec)])
+                            cmd.extend(["-c", "copy", temp_out])
+                            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            if res.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+                                if task.keep_original:
+                                    final_path = os.path.splitext(result_path)[0] + " (Trimmed)" + os.path.splitext(result_path)[1]
+                                    if os.path.exists(final_path):
+                                        try: os.remove(final_path)
+                                        except Exception: pass
+                                    os.rename(temp_out, final_path)
+                                    result_path = final_path
+                                else:
+                                    os.remove(result_path)
+                                    os.rename(temp_out, result_path)
+                            else:
+                                logger.warning("Copy trim failed, trying re-encode trim...")
+                                cmd[-2:] = ["-c:v", "libx264", "-preset", "fast", "-c:a", "aac", temp_out]
+                                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                                if os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+                                    if task.keep_original:
+                                        final_path = os.path.splitext(result_path)[0] + " (Trimmed)" + os.path.splitext(result_path)[1]
+                                        if os.path.exists(final_path):
+                                            try: os.remove(final_path)
+                                            except Exception: pass
+                                        os.rename(temp_out, final_path)
+                                        result_path = final_path
+                                    else:
+                                        os.remove(result_path)
+                                        os.rename(temp_out, result_path)
+                        except Exception as trim_err:
+                            logger.error("Trimming failed: %s", trim_err)
+
                 task.status = TaskStatus.COMPLETED
                 task.progress = 100.0
                 task.filename = result_path or task.filename

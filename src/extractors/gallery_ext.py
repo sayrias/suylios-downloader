@@ -108,6 +108,7 @@ class GalleryDLExtractor(BaseExtractor):
         output_path: str,
         format_id: str = "best",
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        **kwargs: Any,
     ) -> str:
         """Download gallery contents using gallery-dl."""
         try:

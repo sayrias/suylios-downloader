@@ -159,6 +159,7 @@ class BunkrExtractor(BaseExtractor):
         output_path: str,
         format_id: str = "best",
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        **kwargs: Any,
     ) -> str:
         page_type, items = self._scrape_page(url)
 
@@ -231,8 +232,11 @@ class BunkrExtractor(BaseExtractor):
         # Detect page type
         items: list[dict[str, Any]] = []
 
+        path_part = urlparse(url).path.lower()
+        is_single = any(path_part.startswith(prefix) for prefix in ("/f/", "/v/", "/i/", "/d/"))
+
         # --- Album page: grid/list of media thumbnails with links ---
-        album_links = soup.select(
+        album_links = [] if is_single else soup.select(
             'a[href*="/v/"], a[href*="/i/"], a[href*="/d/"], a[href*="/f/"],'
             ' .grid-images a, .grid-images_box a,'
             ' a.grid-images_box-link, a.image-container'
@@ -373,6 +377,18 @@ class BunkrExtractor(BaseExtractor):
                     "url": cdn_url,
                     "filename": fname,
                 })
+
+        thumb = ""
+        meta_og = soup.select_one("meta[property='og:image']") or soup.select_one("meta[name='twitter:image']")
+        if meta_og and meta_og.get("content"):
+            thumb = meta_og["content"]
+        if not thumb:
+            v_tag = soup.select_one("video[poster]")
+            if v_tag and v_tag.get("poster"):
+                thumb = v_tag["poster"]
+        if thumb:
+            for it in items:
+                it["thumbnail"] = thumb
 
         res = ("media", items)
         if hasattr(self, "_scrape_cache"):

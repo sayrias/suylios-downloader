@@ -114,7 +114,14 @@ class YtdlpExtractor(BaseExtractor):
         url: str,
         output_path: str,
         format_id: str = "best",
-        progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        progress_hook=None,
+        start_time: str = "",
+        end_time: str = "",
+        embed_metadata: bool = True,
+        download_subtitles: bool = False,
+        subtitle_langs: str = "tr,en",
+        keep_original: bool = False,
+        **kwargs: Any,
     ) -> str:
         """Download media via yt-dlp and return the resulting file path."""
         try:
@@ -132,6 +139,57 @@ class YtdlpExtractor(BaseExtractor):
         # Format selection
         fmt_opts = self._format_opts(format_id)
         ydl_opts.update(fmt_opts)
+
+        # --- Video trimming (download sections) ---
+        if (start_time or end_time) and not keep_original:
+            def _p_time(val: str) -> float:
+                if not val: return 0.0
+                parts = str(val).strip().split(":")
+                try:
+                    if len(parts) == 1: return float(parts[0])
+                    elif len(parts) == 2: return float(parts[0]) * 60.0 + float(parts[1])
+                    elif len(parts) >= 3: return float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+                except Exception: return 0.0
+                return 0.0
+            s_sec = _p_time(start_time)
+            e_sec = _p_time(end_time)
+            if e_sec > 0 and e_sec <= s_sec:
+                e_sec = s_sec + e_sec
+            ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [(s_sec, e_sec if e_sec > 0 else None)])
+            ydl_opts["force_keyframes_at_cuts"] = True
+            logger.info("Trimming enabled: %s (%.1fs) -> %s (%.1fs)", start_time, s_sec, end_time, e_sec)
+
+        # --- Metadata & thumbnail embedding ---
+        if embed_metadata and config.get("embed_metadata", True):
+            ffmpeg_path = config.get_ffmpeg_path()
+            if ffmpeg_path:
+                pps = ydl_opts.setdefault("postprocessors", [])
+                # Check if audio postprocessor already exists
+                has_audio_pp = any(p.get("key") == "FFmpegExtractAudio" for p in pps)
+                if not has_audio_pp:
+                    # For video: embed metadata
+                    if not any(p.get("key") == "FFmpegMetadata" for p in pps):
+                        pps.append({"key": "FFmpegMetadata", "add_metadata": True})
+                else:
+                    # For audio: embed metadata + thumbnail as cover art
+                    if not any(p.get("key") == "FFmpegMetadata" for p in pps):
+                        pps.append({"key": "FFmpegMetadata", "add_metadata": True})
+                    if not any(p.get("key") == "EmbedThumbnail" for p in pps):
+                        ydl_opts["writethumbnail"] = True
+                        pps.append({"key": "EmbedThumbnail"})
+
+        # --- Subtitle downloading ---
+        # Check task-level flag OR global config setting
+        should_dl_subs = download_subtitles or config.get("download_subtitles", False)
+        if should_dl_subs:
+            langs = [l.strip() for l in subtitle_langs.split(",") if l.strip()]
+            ydl_opts["writesubtitles"] = True
+            ydl_opts["writeautomaticsub"] = True
+            ydl_opts["subtitleslangs"] = langs
+            ydl_opts["subtitlesformat"] = "srt/vtt/best"
+            ydl_opts["outtmpl"] = {"default": "%(title).100B [%(id)s]/%(title).150B [%(id)s].%(ext)s"}
+            logger.info("Subtitles enabled for langs: %s", langs)
+
         logger.info("yt-dlp download: url=%s, format=%s, postprocessors=%s",
                      url[:80], ydl_opts.get("format", "?"),
                      bool(ydl_opts.get("postprocessors")))
@@ -214,11 +272,18 @@ class YtdlpExtractor(BaseExtractor):
             "retries": 5,
             "fragment_retries": 5,
             "socket_timeout": 30,
-            "nocheckcertificate": False,
+            "nocheckcertificate": True,
             "geo_bypass": True,
             "noprogress": True,
         }
         check_url = (url or getattr(self, "_task_url", "")).lower()
+        if "youtu" in check_url:
+            opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["ios", "android", "mweb", "web"],
+                    "player_skip": ["webpage", "configs"],
+                }
+            }
         if "list=rd" in check_url or "start_radio=" in check_url or "list=ul" in check_url or "list=ll" in check_url:
             opts["playlistend"] = 50
 
@@ -236,8 +301,9 @@ class YtdlpExtractor(BaseExtractor):
             opts["proxy"] = proxy
 
         # Speed limit (bytes/sec, 0 = unlimited)
-        speed_limit = config.get("speed_limit", 0)
-        if speed_limit and speed_limit > 0:
+        try: speed_limit = int(config.get("speed_limit", 0) or 0)
+        except Exception: speed_limit = 0
+        if speed_limit > 0:
             opts["ratelimit"] = speed_limit
 
         # Cookies file support from site settings

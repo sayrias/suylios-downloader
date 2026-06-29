@@ -52,6 +52,10 @@
         <button class="titlebar-nav-btn" data-page="history" title="Geçmiş">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
         </button>
+        <button class="titlebar-nav-btn" data-page="scheduled" title="Zamanlanmış İndirmeler" style="position:relative;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span id="scheduled-badge" class="badge hidden" style="position:absolute; bottom:2px; right:2px; width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 4px #ef4444;"></span>
+        </button>
         <button class="titlebar-nav-btn" data-page="settings" title="Ayarlar">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
         </button>
@@ -91,8 +95,8 @@
       <!-- URL Input Bar -->
       <div class="url-input-section">
         <div class="url-input-container glass-panel">
-          <div class="url-input-row">
-            <div class="url-field-wrapper">
+          <div class="url-input-row" style="flex-wrap: nowrap; align-items: center;">
+            <div class="url-field-wrapper" style="flex: 1; min-width: 0;">
               <svg class="url-icon" viewBox="0 0 24 24" width="20" height="20">
                 <path fill="currentColor" d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/>
               </svg>
@@ -100,45 +104,68 @@
               <button id="btn-paste" class="url-action-btn" title="Yapıştır">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>
               </button>
+              <button id="btn-show-options" class="url-action-btn" style="font-size:15px; padding:0 8px;" title="Filtre & Seçenekler (Format, Kalite, Toplu, Zamanla)">🎛️</button>
             </div>
-            <div class="url-controls">
-              <div class="select-wrapper">
-                <label class="select-label">Format</label>
-                <select id="format-select">
-                  <option value="auto">✨ Otomatik (Dengeli)</option>
-                  <option value="mp4">🎬 MP4 Video (H.264)</option>
-                  <option value="mkv">🎞️ MKV Video (Kayıpsız)</option>
-                  <option value="webm">🌐 WebM Video (VP9)</option>
-                  <option value="mp3">🎵 MP3 Ses (HQ)</option>
-                  <option value="flac">💎 FLAC Ses (Stüdyo)</option>
-                  <option value="m4a">📱 M4A Ses (Apple)</option>
-                  <option value="wav">🎙️ WAV Ham Ses</option>
-                </select>
-              </div>
-              <div class="select-wrapper">
-                <label class="select-label">Kalite</label>
-                <select id="quality-select">
-                  <option value="best" selected>⚡ Otomatik (Orijinal Kalite)</option>
-                  <option value="2160p">🌟 4K Ultra HD (60fps)</option>
-                  <option value="1440p">⚡ 2K Quad HD (1440p)</option>
-                  <option value="1080p">🎯 Full HD (1080p)</option>
-                  <option value="720p">📺 HD Ready (720p)</option>
-                  <option value="480p">📱 Standart SD (480p)</option>
-                  <option value="360p">💾 Tasarruflu (360p)</option>
-                </select>
-              </div>
-              <button id="btn-download" class="btn-primary glow-btn">
-                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-                <span>İndir</span>
-              </button>
+            <button id="btn-download" class="btn-primary glow-btn" style="flex-shrink: 0; white-space: nowrap;">
+              <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+              <span>İndir</span>
+            </button>
+          </div>
+          <!-- Options Row (expandable filter options) -->
+          <div id="options-row" class="url-controls hidden" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-start; width: 100%;">
+            <div class="select-wrapper">
+              <label class="select-label">Format</label>
+              <select id="format-select">
+                <option value="auto">✨ Otomatik (Dengeli)</option>
+                <option value="mp4">🎬 MP4 Video (H.264)</option>
+                <option value="mkv">🎞️ MKV Video (Kayıpsız)</option>
+                <option value="webm">🌐 WebM Video (VP9)</option>
+                <option value="mp3">🎵 MP3 Ses (HQ)</option>
+                <option value="flac">💎 FLAC Ses (Stüdyo)</option>
+                <option value="m4a">📱 M4A Ses (Apple)</option>
+                <option value="wav">🎙️ WAV Ham Ses</option>
+              </select>
             </div>
+            <div class="select-wrapper">
+              <label class="select-label">Kalite</label>
+              <select id="quality-select">
+                <option value="best" selected>⚡ Otomatik (Orijinal Kalite)</option>
+                <option value="2160p">🌟 4K Ultra HD (60fps)</option>
+                <option value="1440p">⚡ 2K Quad HD (1440p)</option>
+                <option value="1080p">🎯 Full HD (1080p)</option>
+                <option value="720p">📺 HD Ready (720p)</option>
+                <option value="480p">📱 Standart SD (480p)</option>
+                <option value="360p">💾 Tasarruflu (360p)</option>
+              </select>
+            </div>
+            <button id="btn-batch" class="btn-v12-tool" title="Toplu İndirme — Birden fazla URL'yi tek seferde ekle">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></svg>
+              <span>Toplu</span>
+            </button>
+            <button id="btn-schedule" class="btn-v12-tool" style="--tool-color: #c084fc; --tool-border: rgba(168,85,247,0.4); --tool-bg: rgba(168,85,247,0.08);" title="Zamanlanmış İndirme — Belirli bir saate indirme kur">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></svg>
+              <span>Zamanla</span>
+            </button>
+          </div>
+          <!-- Trimming Row (expandable) -->
+          <div id="trim-row" class="trim-row hidden" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="trim-label">⏱️ <span id="trim-label-text">Zaman Aralığı:</span></span>
+            <input type="text" id="trim-start" placeholder="00:00:00" class="trim-input" maxlength="8">
+            <span style="color:var(--text-secondary); font-size:12px;">→</span>
+            <input type="text" id="trim-end" placeholder="00:10:00" class="trim-input" maxlength="8">
+            <button id="btn-trim-action" class="btn-secondary btn-sm" style="font-size:12px; padding:6px 14px; font-weight:600; border-color:rgba(0,240,255,0.4); color:var(--accent-cyan);">⏱️ <span id="trim-btn-text">Kes</span></button>
+            <button id="btn-trim-clear" class="btn-secondary btn-sm hidden" style="font-size:12px; padding:6px 10px; border-color:rgba(239,68,68,0.4); color:#ef4444;" title="Temizle">✕</button>
+            <label id="trim-keep-label" style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; color:var(--text-secondary); margin-left:6px; padding:4px 8px; border-radius:6px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle);" title="Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap">
+              <input type="checkbox" id="trim-keep-original" style="accent-color:var(--accent-cyan); cursor:pointer;">
+              <span id="trim-keep-text">Orijinal videoyu sakla</span>
+            </label>
           </div>
         </div>
         <!-- Smart Clipboard Banner -->
         <div id="clipboard-banner" class="clipboard-banner glass-panel hidden">
           <div class="clipboard-info">
             <span class="clipboard-icon">🔗</span>
-            <span class="clipboard-text">Panoda yeni link algılandı: <strong id="clipboard-url-text">...</strong></span>
+            <span class="clipboard-text"><span id="clipboard-label-text">Panoda yeni link algılandı: </span><strong id="clipboard-url-text">...</strong></span>
           </div>
           <div class="clipboard-actions">
             <button id="btn-clipboard-download" class="btn-primary glow-btn btn-sm">Tek Tıkla İndir</button>
@@ -161,8 +188,8 @@
               <span></span><span></span><span></span><span></span><span></span><span></span>
             </div>
           </div>
-          <h2>İndirmeye Hazır</h2>
-          <p>URL yapıştırarak veya <kbd>Ctrl</kbd> + <kbd>V</kbd> basarak indirmeye başla</p>
+          <h2 id="empty-state-title">İndirmeye Hazır</h2>
+          <p id="empty-state-desc">URL yapıştırarak veya <kbd>Ctrl</kbd> + <kbd>V</kbd> basarak indirmeye başla</p>
         </div>
 
         <!-- Download Cards Container -->
@@ -259,6 +286,63 @@
                     <input type="checkbox" id="setting-clipboard-monitor" checked>
                     <span class="toggle-slider"></span>
                   </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">Sistem Başlatıldığında Otomatik Aç</span>
+                  <span class="setting-desc">Bilgisayar açıldığında uygulama arka planda başlar ve zamanlanmış indirmeleri kontrol eder</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-auto-start-windows">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">Arka Planda Çalış</span>
+                  <span class="setting-desc">Kapat butonuna basıldığında uygulama sistem tepsisine küçülür</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-background-mode" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">Metadata Göm (ID3/Küçük Resim)</span>
+                  <span class="setting-desc">MP3/MP4 dosyalarına başlık, sanatçı ve kapak resmi göm</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-embed-metadata" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">Altyazı İndir</span>
+                  <span class="setting-desc">Mevcut altyazıları .srt/.vtt olarak indir</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-download-subtitles">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">İndirme Bitince...</span>
+                  <span class="setting-desc">İndirmeler tamamlandığında uyku/kapatma ayarla</span>
+                </div>
+                <div class="setting-control">
+                  <button id="btn-open-shutdown-modal" class="btn-secondary btn-sm" style="font-size:12px;">⏰ Ayarla</button>
                 </div>
               </div>
             </div>
@@ -792,7 +876,7 @@
                   </svg>
                 </div>
                 <h1 class="about-title">Suylios Downloader</h1>
-                <span class="about-version">Sürüm 1.1.0</span>
+                <span class="about-version" id="about-version-text">Sürüm 1.2.0</span>
                 <p class="about-desc">Hızlı, güvenilir ve şık medya indirici</p>
               </div>
               <div class="about-links">
@@ -802,7 +886,6 @@
                 </a>
               </div>
               <div class="about-credits">
-                <p>Powered by yt-dlp & FFmpeg</p>
                 <p class="about-copyright">© 2026 Suylios. Tüm hakları saklıdır.</p>
               </div>
             </div>
@@ -836,6 +919,30 @@
           </div>
           <h2>Geçmiş Boş</h2>
           <p>Henüz tamamlanmış bir indirme bulunmuyor.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── SCHEDULED DOWNLOADS PAGE ─── -->
+    <section id="page-scheduled" class="page">
+      <div class="history-layout">
+        <div class="history-header glass-panel">
+          <div class="history-header-info">
+            <h2>Zamanlanmış İndirmeler</h2>
+            <p>İleri tarihli olarak ayarlanmış ve bekleyen tüm indirmeler</p>
+          </div>
+        </div>
+        <div id="scheduled-list" class="downloads-list" style="padding: 20px 0; width: 100%;">
+          <!-- Scheduled items injected via JS -->
+        </div>
+        <div id="scheduled-empty" class="empty-state hidden">
+          <div class="empty-state-visual">
+            <div class="empty-icon-ring">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="url(#logoGrad)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+          </div>
+          <h2>Zamanlanmış İndirme Yok</h2>
+          <p>Henüz zamanlanmış veya ileri tarihli bir indirme bulunmuyor.</p>
         </div>
       </div>
     </section>
@@ -989,6 +1096,236 @@
         <button id="btn-confirm-cancel" class="btn-secondary">İptal</button>
         <button id="btn-confirm-ok" class="btn-primary glow-btn" style="background: var(--color-error); border-color: rgba(255,82,82,0.3);">Sıfırla</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- BATCH DOWNLOAD MODAL                            -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div id="batch-modal" class="modal-overlay hidden" style="z-index: 100001;">
+    <div class="modal-content glass-panel" style="max-width: 600px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:20px;">📋</span>
+          <h3 id="batch-modal-title">Toplu İndirme</h3>
+        </div>
+        <button id="btn-close-batch" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <p style="font-size:12px; color:var(--text-secondary); margin:0;" id="batch-modal-desc">Her satıra bir URL girin veya .txt dosyası yükleyin.</p>
+          <label class="btn-secondary btn-sm" style="cursor:pointer; display:flex; align-items:center; gap:6px; font-size:12px; padding:6px 12px; border-color:var(--accent-cyan); color:var(--accent-cyan);">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+            <span>TXT Dosyası Seç</span>
+            <input type="file" id="batch-txt-input" accept=".txt" style="display:none;">
+          </label>
+        </div>
+        <textarea id="batch-urls" rows="8" style="width:100%; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:8px; padding:12px; color:var(--text-primary); font-size:13px; resize:vertical; outline:none; font-family:monospace; line-height:1.5;" placeholder="https://youtube.com/watch?v=...&#10;https://tiktok.com/@user/video/...&#10;https://instagram.com/reel/..."></textarea>
+        <div class="modal-options-box" style="display:flex; gap:12px; align-items:center;">
+          <div class="select-wrapper" style="flex:1;">
+            <label class="select-label" id="batch-format-label">Format</label>
+            <select id="batch-format-select" style="width:100%;">
+              <option value="auto">✨ Otomatik</option>
+              <option value="mp4">🎬 MP4</option>
+              <option value="mp3">🎵 MP3</option>
+              <option value="mkv">🎞️ MKV</option>
+            </select>
+          </div>
+          <div class="select-wrapper" style="flex:1;">
+            <label class="select-label" id="batch-quality-label">Kalite</label>
+            <select id="batch-quality-select" style="width:100%;">
+              <option value="best">⚡ En İyi</option>
+              <option value="1080p">🎯 1080p</option>
+              <option value="720p">📺 720p</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="gap:12px; padding-top:8px;">
+        <button id="btn-batch-cancel" class="btn-secondary" style="flex:1;">İptal</button>
+        <button id="btn-batch-start" class="btn-primary glow-btn" style="flex:2; justify-content:center;">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          <span>Tümünü Sıraya Ekle</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- SCHEDULED DOWNLOAD MODAL                        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div id="schedule-modal" class="modal-overlay hidden" style="z-index: 100001;">
+    <div class="modal-content glass-panel" style="max-width: 460px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:20px;">⏰</span>
+          <h3 id="schedule-modal-title">Zamanlanmış İndirme</h3>
+        </div>
+        <button id="btn-close-schedule" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;" id="schedule-modal-desc">İndirmenin başlayacağı tarih ve saati seçin.</p>
+        <label class="select-label">URL</label>
+        <input type="text" id="schedule-url" style="width:100%; background:rgba(0,0,0,0.3); border:1px solid var(--border-subtle); border-radius:8px; padding:10px 12px; color:var(--text-primary); font-size:13px; outline:none; margin-bottom:12px;" placeholder="https://...">
+        <label class="select-label" id="schedule-datetime-label">Tarih & Saat</label>
+        <input type="hidden" id="schedule-datetime">
+        <div class="schedule-date-display-box" style="display: flex; align-items: center; justify-content: space-between; width: 100%; background: var(--bg-surface, rgba(255,255,255,0.05)); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">📅</span>
+            <input type="text" id="schedule-display-input" style="background: transparent; border: none; color: var(--text-primary); font-size: 13px; font-weight: 500; outline: none; width: 180px;" placeholder="29.06.2026 03:21">
+          </div>
+          <button type="button" id="btn-open-dt-picker" class="btn-secondary btn-sm glow-btn" style="padding: 6px 12px; font-size: 12px; border-color: rgba(168,85,247,0.4); color: var(--accent-purple, #a855f7);">⏰ <span id="dt-picker-btn-text">Değiştir</span></button>
+        </div>
+        <div class="modal-options-box" style="display:flex; gap:12px;">
+          <div class="select-wrapper" style="flex:1;">
+            <label class="select-label">Format</label>
+            <select id="schedule-format-select">
+              <option value="auto">✨ Otomatik</option>
+              <option value="mp4">🎬 MP4</option>
+              <option value="mp3">🎵 MP3</option>
+            </select>
+          </div>
+          <div class="select-wrapper" style="flex:1;">
+            <label class="select-label">Kalite</label>
+            <select id="schedule-quality-select">
+              <option value="best">⚡ En İyi</option>
+              <option value="1080p">🎯 1080p</option>
+              <option value="720p">📺 720p</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="gap:10px;">
+        <button id="btn-schedule-cancel" class="btn-secondary">İptal</button>
+        <button id="btn-schedule-confirm" class="btn-primary glow-btn" style="background:linear-gradient(135deg, rgba(168,85,247,0.3), rgba(168,85,247,0.15)); border-color:rgba(168,85,247,0.5);">⏰ <span>Zamanla</span></button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .custom-drum-picker::-webkit-scrollbar { display: none; }
+    .custom-drum-picker { -ms-overflow-style: none; scrollbar-width: none; }
+    .cal-day-cell { padding: 8px 0; text-align: center; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; color: var(--text-primary); }
+    .cal-day-cell:hover:not(.empty) { background: rgba(168,85,247,0.2); }
+    .cal-day-cell.selected { background: var(--accent-purple, #a855f7) !important; color: #fff !important; font-weight: bold; box-shadow: 0 0 10px rgba(168,85,247,0.5); }
+    .cal-day-cell.empty { pointer-events: none; opacity: 0; }
+    .drum-item { height: 36px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; scroll-snap-align: center; color: var(--text-secondary); transition: all 0.15s; }
+    .drum-item.selected { font-size: 16px; font-weight: bold; color: var(--text-primary); }
+  </style>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CUSTOM DATE & TIME PICKER SUB-MODAL               -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div id="dt-picker-modal" class="modal-overlay hidden" style="z-index: 100005;">
+    <div class="modal-content glass-panel" style="max-width: 380px; background: var(--bg-card, #121224); border: 1px solid rgba(168,85,247,0.4); box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+      <div class="modal-header" style="padding-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:18px;">⏰</span>
+          <h3 id="dt-picker-modal-title" style="font-size:16px;">Tarih & Saat Seçimi</h3>
+        </div>
+        <button id="btn-close-dt-picker" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 14px 20px;">
+        <!-- Takvim Başlığı (Ay & Yıl Geçişi) -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; background:var(--bg-surface, rgba(255,255,255,0.03)); padding:6px 12px; border-radius:8px; border:1px solid var(--border-subtle);">
+          <button type="button" id="cal-prev-month" class="btn-secondary btn-sm" style="padding:4px 10px; font-size:12px;">◀</button>
+          <span id="cal-month-year-str" style="font-weight:600; font-size:14px; color:var(--text-primary);">Haziran 2026</span>
+          <button type="button" id="cal-next-month" class="btn-secondary btn-sm" style="padding:4px 10px; font-size:12px;">▶</button>
+        </div>
+        <!-- Gün İsimleri -->
+        <div id="cal-days-header" style="display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; text-align:center; font-size:11px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">
+          <span>Pt</span><span>Sa</span><span>Ça</span><span>Pe</span><span>Cu</span><span>Ct</span><span>Pz</span>
+        </div>
+        <!-- Takvim Yaprakları (Grid) -->
+        <div id="cal-days-grid" style="display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; margin-bottom:18px;"></div>
+
+        <!-- Aşağı Kaydırmalı Saat Seçici (Drum Picker) -->
+        <label class="select-label" style="margin-bottom:8px; font-size:12px; color:var(--text-secondary);" id="dt-time-label">Saat Seçimi</label>
+        <div style="position:relative; display:flex; justify-content:center; align-items:center; height:120px; background:var(--bg-surface, rgba(0,0,0,0.3)); border:1px solid var(--border-subtle); border-radius:10px; overflow:hidden; user-select:none;">
+          <!-- Highlight Bar (Seçim Çerçevesi) -->
+          <div style="position:absolute; top:42px; left:10px; right:10px; height:36px; background:rgba(168,85,247,0.15); border-top:1px solid var(--accent-purple, #a855f7); border-bottom:1px solid var(--accent-purple, #a855f7); border-radius:6px; pointer-events:none;"></div>
+          <!-- Saat Tekerleği -->
+          <div id="drum-hour" class="custom-drum-picker" style="flex:1; height:100%; overflow-y:auto; text-align:center; scroll-snap-type:y mandatory; cursor:grab; padding:42px 0;"></div>
+          <span style="font-size:20px; font-weight:bold; color:var(--accent-cyan); z-index:2; margin:0 10px;">:</span>
+          <!-- Dakika Tekerleği -->
+          <div id="drum-minute" class="custom-drum-picker" style="flex:1; height:100%; overflow-y:auto; text-align:center; scroll-snap-type:y mandatory; cursor:grab; padding:42px 0;"></div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 12px 20px; gap: 10px;">
+        <button id="btn-dt-picker-cancel" class="btn-secondary">İptal</button>
+        <button id="btn-dt-picker-confirm" class="btn-primary glow-btn" style="background:linear-gradient(135deg, rgba(168,85,247,0.4), rgba(168,85,247,0.2)); border-color:rgba(168,85,247,0.6);">✓ <span id="dt-confirm-text">Seç</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- AUTO-SHUTDOWN MODAL                             -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div id="shutdown-modal" class="modal-overlay hidden" style="z-index: 100001;">
+    <div class="modal-content glass-panel" style="max-width: 420px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:20px;">🔴</span>
+          <h3 id="shutdown-modal-title">İndirme Bitince</h3>
+        </div>
+        <button id="btn-close-shutdown" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;" id="shutdown-modal-desc">Tüm aktif indirmeler tamamlandığında bilgisayara ne yapılsın?</p>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:all 0.2s;" class="shutdown-option-card">
+            <input type="radio" name="shutdown-mode" value="" style="accent-color:var(--color-accent);" checked>
+            <div><div style="font-weight:600; font-size:13px;">❌ Hiçbir şey yapma</div><div style="font-size:11px; color:var(--text-secondary);">İndirmeler bitince uygulama normal çalışmaya devam eder.</div></div>
+          </label>
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:all 0.2s;" class="shutdown-option-card">
+            <input type="radio" name="shutdown-mode" value="sleep" style="accent-color:var(--color-accent);">
+            <div><div style="font-weight:600; font-size:13px;">💤 Uyku Moduna Al</div><div style="font-size:11px; color:var(--text-secondary);">Windows uyku moduna alınır. Oturumunuz korunur.</div></div>
+          </label>
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid rgba(239,68,68,0.3); transition:all 0.2s;" class="shutdown-option-card">
+            <input type="radio" name="shutdown-mode" value="shutdown" style="accent-color:#ef4444;">
+            <div><div style="font-weight:600; font-size:13px; color:#f87171;">⚡ Bilgisayarı Kapat</div><div style="font-size:11px; color:var(--text-secondary);">60 saniye geri sayım başlar. Abort komutu ile iptal edebilirsiniz.</div></div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="gap:10px;">
+        <button id="btn-shutdown-cancel" class="btn-secondary">İptal</button>
+        <button id="btn-shutdown-confirm" class="btn-primary glow-btn">✓ Uygula</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- MEDIA PREVIEW PLAYER MODAL                      -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div id="preview-modal" class="modal-overlay hidden" style="z-index: 100002;">
+    <div class="modal-content glass-panel" id="preview-modal-content" style="max-width:860px; padding:0; overflow:hidden; border-radius:16px;">
+      <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--border-subtle);">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0; flex:1;">
+          <span style="font-size:18px;">▶️</span>
+          <h3 id="preview-title" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14px;">Önizleme</h3>
+        </div>
+        <button id="btn-close-preview" class="modal-close-btn">✕</button>
+      </div>
+      <div id="preview-player-area" style="background:#000; position:relative; min-height:300px; display:flex; align-items:center; justify-content:center;">
+        <video id="preview-video" controls style="width:100%; max-height:500px; display:none; outline:none;"></video>
+        <audio id="preview-audio" controls style="width:90%; margin:40px auto; display:none;"></audio>
+        <div id="preview-loading" style="color:var(--text-secondary); font-size:13px;">⏳ Yükleniyor...</div>
+      </div>
+      <div id="preview-controls-bar" style="padding:12px 18px; display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border-subtle);">
+        <div style="font-size:12px; color:var(--text-secondary);" id="preview-meta"></div>
+        <button id="btn-preview-open-folder" class="btn-secondary btn-sm">📁 Klasörü Aç</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto-Shutdown Countdown Overlay -->
+  <div id="shutdown-countdown-overlay" class="modal-overlay hidden" style="z-index: 200000; background:rgba(0,0,0,0.8);">
+    <div class="modal-content glass-panel" style="max-width:340px; text-align:center; border-color:rgba(239,68,68,0.5);">
+      <div style="font-size:48px; margin-bottom:8px;" id="shutdown-countdown-icon">⚡</div>
+      <h3 id="shutdown-countdown-title" style="color:#f87171;">Bilgisayar Kapanıyor</h3>
+      <p id="shutdown-countdown-msg" style="color:var(--text-secondary); font-size:13px; margin:10px 0;">İndirmeler tamamlandı. Bilgisayar kapatılıyor.</p>
+      <div style="font-size:56px; font-weight:900; color:#f87171; margin:16px 0;" id="shutdown-countdown-num">60</div>
+      <button id="btn-abort-shutdown" class="btn-danger" style="width:100%;">✕ İptal Et (Abort)</button>
     </div>
   </div>
 

@@ -30,6 +30,11 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
     "create_subfolders": True,
     "language": "tr",
     "start_minimized": False,
+    "auto_start_windows": False,
+    "background_mode": True,
+    "auto_shutdown": False,
+    "embed_metadata": True,
+    "download_subtitles": False,
     "theme": "basit-beyaz",
     "site_settings": {
         "youtube": {"folder": "YouTube", "quality": "best", "cookies": ""},

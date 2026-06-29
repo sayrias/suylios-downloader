@@ -371,6 +371,7 @@ body::before {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .url-field-wrapper {
@@ -441,8 +442,10 @@ body::before {
 .url-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 1;
+  max-width: 100%;
   position: relative;
   z-index: 200;
 }
@@ -2250,3 +2253,222 @@ body[data-theme="basit-beyaz"] .site-icon-svg {
 .history-card-title { font-size: 14px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-card-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
 .history-card-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+/* v1.2.0 – Trimming Row */
+.trim-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  background: rgba(0, 240, 255, 0.05); border-top: 1px solid rgba(0,240,255,0.15);
+  border-radius: 0 0 12px 12px; flex-wrap: wrap;
+}
+.trim-label { font-size: 12px; color: var(--accent-cyan); font-weight: 600; white-space: nowrap; }
+.trim-input {
+  background: rgba(0,0,0,0.3); border: 1px solid rgba(0,240,255,0.25); border-radius: 6px;
+  padding: 5px 10px; color: var(--text-primary); font-size: 13px; font-family: monospace;
+  width: 96px; outline: none; text-align: center;
+}
+.trim-input:focus { border-color: var(--accent-cyan); box-shadow: 0 0 0 2px rgba(0,240,255,0.1); }
+
+/* v1.2.0 – Shutdown option card hover */
+.shutdown-option-card:hover { background: rgba(255,255,255,0.04); }
+.shutdown-option-card input[type="radio"] { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+
+/* v1.2.0 – Status bar shutdown indicator */
+.status-shutdown-active {
+  display: flex; align-items: center; gap: 6px;
+  color: #fbbf24; font-size: 12px; font-weight: 600;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* v1.2.0 – Toplu & Zamanla Araç Butonları */
+.btn-v12-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
+  background: var(--tool-bg, rgba(0, 240, 255, 0.08));
+  border: 1px solid var(--tool-border, rgba(0, 240, 255, 0.3));
+  color: var(--tool-color, var(--accent-cyan));
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.btn-v12-tool:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  filter: brightness(1.15);
+}
+.btn-v12-tool:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* v1.2.0 – Beyaz Tema Buton Tasarım İyileştirmeleri */
+body[data-theme="basit-beyaz"] .btn-primary {
+  background: linear-gradient(135deg, #0066ff 0%, #0052cc 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(0, 102, 255, 0.3);
+  border: none;
+}
+body[data-theme="basit-beyaz"] .btn-primary:hover {
+  box-shadow: 0 6px 20px rgba(0, 102, 255, 0.4);
+  transform: translateY(-1px);
+}
+body[data-theme="basit-beyaz"] .glow-btn {
+  box-shadow: 0 4px 15px rgba(0, 102, 255, 0.25);
+}
+body[data-theme="basit-beyaz"] .btn-secondary {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+body[data-theme="basit-beyaz"] .btn-secondary:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+body[data-theme="basit-beyaz"] .btn-v12-tool {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+body[data-theme="basit-beyaz"] .btn-v12-tool:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+body[data-theme="basit-beyaz"] #btn-batch {
+  color: #0284c7;
+  border-color: #bae6fd;
+  background: #f0f9ff;
+}
+body[data-theme="basit-beyaz"] #btn-batch:hover {
+  background: #e0f2fe;
+}
+body[data-theme="basit-beyaz"] #btn-schedule {
+  color: #7c3aed;
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+}
+body[data-theme="basit-beyaz"] #btn-schedule:hover {
+  background: #ede9fe;
+}
+
+/* v1.2.0 – Beyaz Tema Modal İyileştirmeleri (Toplu, Zamanlanmış İndirme, Ayarlar vb.) */
+body[data-theme="basit-beyaz"] .modal-content {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.15) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12) !important;
+  color: #1a1a24 !important;
+}
+body[data-theme="basit-beyaz"] .modal-header h3 {
+  color: #1a1a24 !important;
+}
+body[data-theme="basit-beyaz"] .modal-close-btn {
+  color: #4a5568 !important;
+}
+body[data-theme="basit-beyaz"] .modal-close-btn:hover {
+  background: rgba(0, 0, 0, 0.08) !important;
+  color: #1a1a24 !important;
+}
+body[data-theme="basit-beyaz"] #batch-urls,
+body[data-theme="basit-beyaz"] #schedule-url,
+body[data-theme="basit-beyaz"] #schedule-time,
+body[data-theme="basit-beyaz"] .trim-input {
+  background: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+body[data-theme="basit-beyaz"] #batch-urls:focus,
+body[data-theme="basit-beyaz"] #schedule-url:focus,
+body[data-theme="basit-beyaz"] #schedule-time:focus,
+body[data-theme="basit-beyaz"] .trim-input:focus {
+  border-color: #0066ff !important;
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.15) !important;
+  background: #ffffff !important;
+}
+body[data-theme="basit-beyaz"] #batch-modal .modal-body > div[style*="background:rgba(0,0,0,0.15)"],
+body[data-theme="basit-beyaz"] .trim-row {
+  background: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+}
+body[data-theme="basit-beyaz"] .trim-label {
+  color: #0066ff !important;
+}
+
+/* Modern Tarih & Saat Seçici İyileştirmesi */
+#schedule-datetime {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(168, 85, 247, 0.4) !important;
+  border-radius: 10px !important;
+  padding: 12px 14px !important;
+  color: var(--text-primary) !important;
+  font-size: 14px !important;
+  font-family: inherit !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2) !important;
+}
+#schedule-datetime:focus, #schedule-datetime:hover {
+  border-color: #c084fc !important;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.2) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+body[data-theme="basit-beyaz"] #schedule-datetime {
+  color-scheme: light !important;
+  background: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05) !important;
+}
+body[data-theme="basit-beyaz"] #schedule-datetime:focus,
+body[data-theme="basit-beyaz"] #schedule-datetime:hover {
+  border-color: #7c3aed !important;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15) !important;
+  background: #ffffff !important;
+}
+
+@keyframes badgePulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+#scheduled-badge:not(.hidden) {
+  animation: badgePulse 2s infinite;
+}
+
+/* Modal beyaz tema uyumları */
+.modal-options-box {
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+}
+body[data-theme="basit-beyaz"] .modal-options-box {
+  background: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+body[data-theme="basit-beyaz"] #schedule-url {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+body[data-theme="basit-beyaz"] #schedule-url:focus {
+  border-color: #7c3aed !important;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15) !important;
+}
+
+/* Zamanlanan video ikon uçma animasyonu */
+.flying-card {
+  position: fixed !important;
+  z-index: 999999 !important;
+  pointer-events: none !important;
+  transition: transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.7s ease !important;
+}
