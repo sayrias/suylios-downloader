@@ -81,24 +81,21 @@ def _default_download_dir() -> str:
     return str(Path.home() / "Downloads" / "Suylios")
 
 
-def _config_file_path() -> Path:
-    """Return the path to the JSON config file."""
-    if _is_portable():
-        return _get_app_root() / "config.json"
-    appdata = os.environ.get("APPDATA", str(Path.home()))
+def _get_appdata_dir() -> Path:
+    appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
     cfg_dir = Path(appdata) / "SuyliosDownloader"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    return cfg_dir / "config.json"
+    return cfg_dir
+
+
+def _config_file_path() -> Path:
+    """Return the path to the JSON config file."""
+    return _get_appdata_dir() / "config.json"
 
 
 def _history_file_path() -> Path:
     """Return the path to the JSON history file."""
-    if _is_portable():
-        return _get_app_root() / "history.json"
-    appdata = os.environ.get("APPDATA", str(Path.home()))
-    cfg_dir = Path(appdata) / "SuyliosDownloader"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    return cfg_dir / "history.json"
+    return _get_appdata_dir() / "history.json"
 
 
 class Config:

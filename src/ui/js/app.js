@@ -164,6 +164,82 @@
     // Start polling downloads
     startDownloadPolling();
     startClipboardMonitor();
+    setTimeout(() => checkForUpdates(false), 3000);
+    $('#btn-manual-check-update')?.addEventListener('click', () => checkForUpdates(true));
+  }
+
+  async function checkForUpdates(manual = false) {
+    const api = getApi();
+    if (!api || !api.check_for_updates) return;
+    const manualBtn = $('#btn-manual-check-update');
+    const manualBtnTxt = $('#btn-manual-check-update-text');
+    const svgIcon = $('#btn-update-svg-icon');
+    const lang = localStorage.getItem('suylios_language') || 'tr';
+    try {
+      if (manual && manualBtnTxt) {
+        manualBtnTxt.textContent = lang === 'en' ? 'Checking...' : 'Kontrol ediliyor...';
+        if (manualBtn) manualBtn.disabled = true;
+        if (svgIcon) svgIcon.style.animation = 'spin 1s linear infinite';
+      }
+      const startTime = Date.now();
+      const res = await callApi('check_for_updates');
+      if (manual) {
+        const elapsed = Date.now() - startTime;
+        const minWait = 2200;
+        if (elapsed < minWait) {
+          await new Promise(r => setTimeout(r, minWait - elapsed));
+        }
+      }
+      if (manual && manualBtn) manualBtn.disabled = false;
+      if (svgIcon) svgIcon.style.animation = 'none';
+
+      if (res && res.ok && res.has_update) {
+        if (!manual) {
+          const reminded = localStorage.getItem('suylios_update_remind');
+          if (reminded && (Date.now() - parseInt(reminded, 10)) < 12 * 3600 * 1000) {
+            return;
+          }
+        }
+        const modal = $('#update-modal');
+        const verEl = $('#update-modal-ver');
+        const notesEl = $('#update-modal-notes');
+        const nowBtn = $('#btn-update-now');
+        const remindBtn = $('#btn-update-remind');
+        if (!modal) return;
+
+        if (verEl) verEl.textContent = 'v' + res.latest_version;
+        if (notesEl) notesEl.textContent = res.release_notes || 'Yeni geliştirmeler ve hata düzeltmeleri içerir.';
+        
+        nowBtn.onclick = async () => {
+          nowBtn.disabled = true;
+          nowBtn.innerHTML = '⚡ Güncelleniyor... Lütfen bekleyin';
+          await callApi('perform_update', res.download_url);
+        };
+        remindBtn.onclick = () => {
+          localStorage.setItem('suylios_update_remind', Date.now().toString());
+          modal.classList.add('hidden');
+        };
+
+        modal.classList.remove('hidden');
+        if (manual && manualBtnTxt) manualBtnTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
+      } else if (manual) {
+        if (manualBtnTxt) manualBtnTxt.textContent = lang === 'en' ? '✓ Up to Date!' : '✓ Sürümünüz Güncel!';
+        if (svgIcon) svgIcon.innerHTML = '<path d="M20 6L9 17l-5-5"/>';
+        setTimeout(() => {
+          if (manualBtnTxt) manualBtnTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
+          if (svgIcon) svgIcon.innerHTML = '<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>';
+        }, 3000);
+      }
+    } catch(e) {
+      if (manual && manualBtn) {
+        manualBtn.disabled = false;
+        if (manualBtnTxt) manualBtnTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
+        if (svgIcon) {
+          svgIcon.style.animation = 'none';
+          svgIcon.innerHTML = '<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>';
+        }
+      }
+    }
   }
 
   // ─── TITLEBAR ───
@@ -1068,15 +1144,18 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.2.0' : 'Sürüm 1.2.0';
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.0' : 'Sürüm 1.3.0';
+    const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
     const schedDtLbl = $('#schedule-datetime-label'); if (schedDtLbl) schedDtLbl.textContent = lang === 'en' ? 'Date & Time' : 'Tarih & Saat';
     const dtBtnTxt = $('#dt-picker-btn-text'); if (dtBtnTxt) dtBtnTxt.textContent = lang === 'en' ? 'Change' : 'Değiştir';
     const dtModalTitle = $('#dt-picker-modal-title'); if (dtModalTitle) dtModalTitle.textContent = lang === 'en' ? 'Select Date & Time' : 'Tarih & Saat Seçimi';
     const dtTimeLbl = $('#dt-time-label'); if (dtTimeLbl) dtTimeLbl.textContent = lang === 'en' ? 'Time Selection' : 'Saat Seçimi';
-    const dtConfirmTxt = $('#dt-confirm-text'); if (dtConfirmTxt) dtConfirmTxt.textContent = lang === 'en' ? 'Select' : 'Seç';
     const dtCancelBtn = $('#btn-dt-picker-cancel'); if (dtCancelBtn) dtCancelBtn.textContent = lang === 'en' ? 'Cancel' : 'İptal';
+    const updTitle = $('#update-modal-title'); if (updTitle) updTitle.textContent = lang === 'en' ? 'New Version Available!' : 'Yeni Sürüm Mevcut!';
+    const updNow = $('#btn-update-now'); if (updNow && !updNow.disabled) updNow.innerHTML = lang === 'en' ? '⚡ Update Now' : '⚡ Şimdi Güncelle';
+    const updRemind = $('#btn-update-remind'); if (updRemind) updRemind.innerHTML = lang === 'en' ? '⏳ Remind Later' : '⏳ Daha Sonra Anımsat';
     
     const daysHeader = $('#cal-days-header');
     if (daysHeader) {

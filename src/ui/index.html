@@ -876,8 +876,16 @@
                   </svg>
                 </div>
                 <h1 class="about-title">Suylios Downloader</h1>
-                <span class="about-version" id="about-version-text">Sürüm 1.2.0</span>
+                <span class="about-version" id="about-version-text">Sürüm 1.3.0</span>
                 <p class="about-desc">Hızlı, güvenilir ve şık medya indirici</p>
+              </div>
+              <div style="margin: 20px 0; display: flex; justify-content: center;">
+                <button id="btn-manual-check-update" class="btn-primary glow-btn btn-sm" style="display:inline-flex; align-items:center; gap:8px; padding: 10px 22px;">
+                  <svg id="btn-update-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                  </svg>
+                  <span id="btn-manual-check-update-text">Güncellemeleri Kontrol Et</span>
+                </button>
               </div>
               <div class="about-links">
                 <a href="https://github.com/sayrias/suylios-downloader" class="about-link" id="link-github" target="_blank">
@@ -1326,6 +1334,38 @@
       <p id="shutdown-countdown-msg" style="color:var(--text-secondary); font-size:13px; margin:10px 0;">İndirmeler tamamlandı. Bilgisayar kapatılıyor.</p>
       <div style="font-size:56px; font-weight:900; color:#f87171; margin:16px 0;" id="shutdown-countdown-num">60</div>
       <button id="btn-abort-shutdown" class="btn-danger" style="width:100%;">✕ İptal Et (Abort)</button>
+    </div>
+  </div>
+
+  <!-- Update Modal -->
+  <div id="update-modal" class="modal-overlay hidden" style="z-index: 150000;">
+    <div class="modal-content glass-panel" style="max-width: 420px; text-align: center; border: 1px solid rgba(168, 85, 247, 0.4); box-shadow: 0 0 30px rgba(168, 85, 247, 0.25);">
+      <div style="margin: 0 auto 12px; width: 56px; height: 56px; border-radius: 50%; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4); display: flex; align-items: center; justify-content: center; color: var(--accent-purple);">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v10l4.5 4.5"/>
+          <circle cx="12" cy="12" r="10"/>
+        </svg>
+      </div>
+      <h3 id="update-modal-title" style="color: var(--text-primary); font-size: 20px; margin-bottom: 6px;">Yeni Sürüm Mevcut!</h3>
+      <p id="update-modal-ver" style="color: var(--accent-purple); font-weight: 700; font-size: 16px; margin-bottom: 12px;">v1.3.0</p>
+      <div id="update-modal-notes" style="max-height: 140px; overflow-y: auto; text-align: left; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px; font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;"></div>
+      <div style="display: flex; gap: 8px; flex-direction: column;">
+        <button id="btn-update-now" class="btn-primary glow-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>Şimdi Güncelle</span>
+        </button>
+        <button id="btn-update-remind" class="btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span>Daha Sonra Anımsat</span>
+        </button>
+      </div>
     </div>
   </div>
 

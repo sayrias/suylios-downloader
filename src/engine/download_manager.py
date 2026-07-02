@@ -510,15 +510,15 @@ class DownloadManager:
                     folder_name = site_cfg.get("folder") or default_folder
                     dl_dir = str(Path(dl_dir) / folder_name)
 
-                    # Create subfolder named after playlist or archive title
+                    # Create subfolder ONLY for youtube playlists (other extractors like bunkr/gofile already create their own folder)
                     is_playlist_or_archive = (
-                        ("list=" in url_lower or "playlist" in url_lower
-                         or info.get("_type") == "playlist"
-                         or info.get("is_playlist")
-                         or (info.get("playlist_count") or 0) > 1
-                         or info.get("entries") is not None)
-                        if site_key == "youtube" else
-                        (site_key in ("bunkr", "gofile", "pixeldrain") or task.item_count > 1)
+                        site_key == "youtube" and (
+                            "list=" in url_lower or "playlist" in url_lower
+                            or info.get("_type") == "playlist"
+                            or info.get("is_playlist")
+                            or (info.get("playlist_count") or 0) > 1
+                            or info.get("entries") is not None
+                        )
                     )
                     if is_playlist_or_archive and task.title:
                         safe_title = re.sub(r'[\\/*?:"<>|]', "", str(task.title)).strip()

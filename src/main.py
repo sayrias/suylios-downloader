@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 import threading
+import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
@@ -71,8 +73,9 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.3.0"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
+SINGLE_INSTANCE_PORT = 58942
 
 # ---------------------------------------------------------------------------
 # UI path resolution
@@ -644,8 +647,18 @@ class Bridge:
         if self._window:
             try:
                 self._window.show()
+                self._window.restore()
             except Exception as exc:
                 logger.error("show_from_tray failed: %s", exc)
+        if os.name == "nt":
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.FindWindowW(None, APP_NAME)
+                if hwnd:
+                    ctypes.windll.user32.ShowWindow(hwnd, 9)
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
 
     def force_quit(self) -> None:
         """Force a complete application exit."""
@@ -693,6 +706,78 @@ class Bridge:
                 return {"ok": False, "error": f"Unknown command: {command}"}
         except Exception as exc:
             logger.error("run_system_command failed: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def check_for_updates(self) -> dict[str, Any]:
+        """Check latest release on GitHub API."""
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/sayrias/suylios-downloader/releases/latest?t={int(time.time())}",
+                headers={"User-Agent": "SuyliosDownloader"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                tag = data.get("tag_name", "").lstrip("v")
+                current = APP_VERSION.lstrip("v")
+                exe_url = ""
+                for asset in data.get("assets", []):
+                    if asset.get("name", "").endswith(".exe"):
+                        exe_url = asset.get("browser_download_url", "")
+                        break
+                return {
+                    "ok": True,
+                    "has_update": tag != current and tag > current,
+                    "latest_version": tag,
+                    "download_url": exe_url or data.get("html_url", ""),
+                    "release_notes": data.get("body", "")
+                }
+        except Exception as exc:
+            logger.warning("Update check error: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def perform_update(self, download_url: str) -> dict[str, Any]:
+        """Download latest exe and perform self-replacement update."""
+        if not download_url or not download_url.endswith(".exe"):
+            webbrowser.open(download_url or APP_GITHUB)
+            return {"ok": True, "browser": True}
+        try:
+            import urllib.request
+            appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
+            upd_dir = Path(appdata) / "SuyliosDownloader" / "Update"
+            upd_dir.mkdir(parents=True, exist_ok=True)
+            new_exe = upd_dir / "Suylios_new.exe"
+
+            req = urllib.request.Request(download_url, headers={"User-Agent": "SuyliosDownloader"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(new_exe, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+            current_exe = sys.executable if getattr(sys, "frozen", False) else ""
+            if not current_exe or not current_exe.endswith(".exe"):
+                os.startfile(str(new_exe))
+                return {"ok": True}
+
+            bat_path = upd_dir / "update.bat"
+            bat_content = f'''@echo off
+timeout /t 2 /nobreak >nul
+copy /y "{new_exe}" "{current_exe}"
+del "{new_exe}"
+start "" "{current_exe}"
+del "%~f0"
+'''
+            with open(bat_path, "w", encoding="utf-8") as bf:
+                bf.write(bat_content)
+
+            subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.force_quit()
+            return {"ok": True}
+        except Exception as exc:
+            logger.error("Update failed: %s", exc)
+            webbrowser.open(download_url)
             return {"ok": False, "error": str(exc)}
 
     def shutdown(self) -> None:
@@ -777,8 +862,67 @@ def _scheduler_and_shutdown_loop(bridge) -> None:
         time.sleep(5)
 
 
+def _ensure_single_instance(bridge_holder: Optional[Any] = None) -> None:
+    import socket
+    if bridge_holder is None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", SINGLE_INSTANCE_PORT))
+            s.sendall(b"RESTORE\n")
+            s.close()
+            print("⚡ Suylios zaten arka planda çalışıyor! Mevcut pencere öne getiriliyor...")
+            sys.exit(0)
+        except (ConnectionRefusedError, OSError):
+            pass
+    else:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+            server.listen(5)
+        except Exception as exc:
+            logger.warning("Single instance bind error: %s", exc)
+            return
+
+        def listener():
+            while True:
+                try:
+                    conn, _ = server.accept()
+                    data = conn.recv(1024)
+                    conn.close()
+                    if b"RESTORE" in data:
+                        if hasattr(bridge_holder, "window") and bridge_holder.window:
+                            try:
+                                bridge_holder.window.show()
+                                bridge_holder.window.restore()
+                            except Exception:
+                                pass
+                        if hasattr(bridge_holder, "show_from_tray"):
+                            try:
+                                bridge_holder.show_from_tray()
+                            except Exception:
+                                pass
+                        if os.name == "nt":
+                            try:
+                                import ctypes
+                                hwnd = ctypes.windll.user32.FindWindowW(None, APP_NAME)
+                                if hwnd:
+                                    SW_RESTORE = 9
+                                    ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+                                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                            except Exception:
+                                pass
+                except Exception:
+                    break
+
+        t = threading.Thread(target=listener, daemon=True, name="single_instance")
+        t.start()
+
+
 def main() -> None:
     """Launch the Suylios Downloader application."""
+    _ensure_single_instance(bridge_holder=None)
     logger.info("%s v%s starting …", APP_NAME, APP_VERSION)
     logger.info("Portable mode: %s", config.is_portable())
     logger.info("Download directory: %s", config.get_download_dir())
@@ -818,6 +962,7 @@ def main() -> None:
         hidden=False,
     )
     bridge.set_window(window)
+    _ensure_single_instance(bridge_holder=bridge)
 
     def _on_ready() -> None:
         try:
