@@ -211,8 +211,45 @@
         if (notesEl) notesEl.textContent = res.release_notes || 'Yeni geliştirmeler ve hata düzeltmeleri içerir.';
         
         nowBtn.onclick = async () => {
-          nowBtn.disabled = true;
-          nowBtn.innerHTML = '⚡ Güncelleniyor... Lütfen bekleyin';
+          const progContainer = $('#update-progress-container');
+          const progText = $('#update-progress-text');
+          const progPercent = $('#update-progress-percent');
+          const progFill = $('#update-progress-fill');
+          const progDetails = $('#update-progress-details');
+          const btnsContainer = nowBtn.parentElement;
+          
+          if (btnsContainer) btnsContainer.style.display = 'none';
+          if (progContainer) progContainer.style.display = 'flex';
+          
+          window.addEventListener('updateProgress', (e) => {
+            const { progress, downloaded, total, status, error } = e.detail;
+            if (status === 'downloading') {
+              if (progText) progText.textContent = lang === 'en' ? 'Downloading...' : 'İndiriliyor...';
+              if (progPercent) progPercent.textContent = progress + '%';
+              if (progFill) progFill.style.width = progress + '%';
+              if (progDetails && total > 0) {
+                const dlMB = (downloaded / (1024 * 1024)).toFixed(1);
+                const totMB = (total / (1024 * 1024)).toFixed(1);
+                progDetails.textContent = `${dlMB} MB / ${totMB} MB`;
+              }
+            } else if (status === 'extracting') {
+              if (progText) progText.textContent = lang === 'en' ? 'Installing...' : 'Kuruluyor...';
+              if (progPercent) progPercent.textContent = '100%';
+              if (progFill) progFill.style.width = '100%';
+              if (progDetails) progDetails.textContent = lang === 'en' ? 'Applying update...' : 'Güncelleme uygulanıyor...';
+            } else if (status === 'error') {
+              if (progText) {
+                progText.textContent = lang === 'en' ? 'Error!' : 'Hata!';
+                progText.style.color = '#ef4444';
+              }
+              if (progDetails) progDetails.textContent = error;
+              setTimeout(() => {
+                if (btnsContainer) btnsContainer.style.display = 'flex';
+                if (progContainer) progContainer.style.display = 'none';
+              }, 4000);
+            }
+          });
+
           await callApi('perform_update', res.download_url);
         };
         remindBtn.onclick = () => {

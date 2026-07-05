@@ -720,16 +720,23 @@ class Bridge:
                 data = json.loads(resp.read().decode("utf-8"))
                 tag = data.get("tag_name", "").lstrip("v")
                 current = APP_VERSION.lstrip("v")
-                exe_url = ""
+                download_url = ""
                 for asset in data.get("assets", []):
-                    if asset.get("name", "").endswith(".exe"):
-                        exe_url = asset.get("browser_download_url", "")
+                    name = asset.get("name", "")
+                    if name.endswith(".zip") and "Portable" in name:
+                        download_url = asset.get("browser_download_url", "")
                         break
+                
+                if not download_url:
+                    for asset in data.get("assets", []):
+                        if asset.get("name", "").endswith(".exe"):
+                            download_url = asset.get("browser_download_url", "")
+                            break
                 return {
                     "ok": True,
                     "has_update": tag != current and tag > current,
                     "latest_version": tag,
-                    "download_url": exe_url or data.get("html_url", ""),
+                    "download_url": download_url or data.get("html_url", ""),
                     "release_notes": data.get("body", "")
                 }
         except Exception as exc:
@@ -737,48 +744,90 @@ class Bridge:
             return {"ok": False, "error": str(exc)}
 
     def perform_update(self, download_url: str) -> dict[str, Any]:
-        """Download latest exe and perform self-replacement update."""
-        if not download_url or not download_url.endswith(".exe"):
+        """Download portable zip asynchronously and perform in-place update."""
+        if not download_url or not download_url.endswith(".zip"):
             webbrowser.open(download_url or APP_GITHUB)
             return {"ok": True, "browser": True}
-        try:
-            import urllib.request
-            appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
-            upd_dir = Path(appdata) / "SuyliosDownloader" / "Update"
-            upd_dir.mkdir(parents=True, exist_ok=True)
-            new_exe = upd_dir / "Suylios_new.exe"
+        
+        def _update_thread():
+            try:
+                import urllib.request
+                import zipfile
+                import shutil
+                
+                appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
+                upd_dir = Path(appdata) / "SuyliosDownloader" / "UpdateTemp"
+                if upd_dir.exists():
+                    shutil.rmtree(upd_dir, ignore_errors=True)
+                upd_dir.mkdir(parents=True, exist_ok=True)
+                
+                zip_path = upd_dir / "update.zip"
+                
+                req = urllib.request.Request(download_url, headers={"User-Agent": "SuyliosDownloader"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    total_size = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    
+                    with open(zip_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            percent = min(100, int((downloaded / total_size) * 100)) if total_size > 0 else 0
+                            
+                            try:
+                                if self._window:
+                                    self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{progress: {percent}, downloaded: {downloaded}, total: {total_size}, status: 'downloading'}}}}));")
+                            except Exception:
+                                pass
 
-            req = urllib.request.Request(download_url, headers={"User-Agent": "SuyliosDownloader"})
-            with urllib.request.urlopen(req, timeout=60) as resp, open(new_exe, "wb") as f:
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+                try:
+                    if self._window:
+                        self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{progress: 100, status: 'extracting'}}}}));")
+                except Exception:
+                    pass
 
-            current_exe = sys.executable if getattr(sys, "frozen", False) else ""
-            if not current_exe or not current_exe.endswith(".exe"):
-                os.startfile(str(new_exe))
-                return {"ok": True}
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(upd_dir)
+                    
+                zip_path.unlink(missing_ok=True)
+                
+                current_exe = sys.executable if getattr(sys, "frozen", False) else ""
+                if not current_exe or not current_exe.endswith(".exe"):
+                    os.startfile(str(upd_dir))
+                    return
 
-            bat_path = upd_dir / "update.bat"
-            bat_content = f'''@echo off
+                app_dir = Path(current_exe).parent
+                portable_folder = upd_dir / "Suylios-Portable"
+                if not portable_folder.exists():
+                    portable_folder = upd_dir
+                
+                bat_path = upd_dir / "update.bat"
+                bat_content = f'''@echo off
 timeout /t 2 /nobreak >nul
-copy /y "{new_exe}" "{current_exe}"
-del "{new_exe}"
+xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}\\"
+rmdir /s /q "{upd_dir}"
 start "" "{current_exe}"
 del "%~f0"
 '''
-            with open(bat_path, "w", encoding="utf-8") as bf:
-                bf.write(bat_content)
+                with open(bat_path, "w", encoding="utf-8") as bf:
+                    bf.write(bat_content)
 
-            subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            self.force_quit()
-            return {"ok": True}
-        except Exception as exc:
-            logger.error("Update failed: %s", exc)
-            webbrowser.open(download_url)
-            return {"ok": False, "error": str(exc)}
+                subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.force_quit()
+
+            except Exception as exc:
+                logger.error("Update failed: %s", exc)
+                try:
+                    if self._window:
+                        self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{status: 'error', error: '{str(exc)}'}}}}));")
+                except:
+                    pass
+
+        threading.Thread(target=_update_thread, daemon=True).start()
+        return {"ok": True, "async": True}
 
     def shutdown(self) -> None:
         """Called on window close to release resources."""
