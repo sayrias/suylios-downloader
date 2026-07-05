@@ -8,6 +8,7 @@ from hundreds of sites (Danbooru, Gelbooru, e-hentai, Imgur, …).
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -48,6 +49,19 @@ class GalleryDLExtractor(BaseExtractor):
                 "gallery-dl is not installed.  Run: pip install gallery-dl"
             ) from exc
 
+        # Rate limit engellerini ve Reddit 403/429 hatalarını önle (Tarayıcı taklidi)
+        gdl_config.clear()
+        gdl_config.set(("extractor",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        gdl_config.set(("downloader",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        gdl_config.set(("extractor", "reddit"), "comments", 0)
+        gdl_config.set(("extractor", "reddit"), "morecomments", False)
+        gdl_config.set(("extractor",), "sleep-request", 0.5)
+        gdl_config.set(("extractor",), "sleep", 0.3)
+        gdl_config.set(("extractor",), "retries", 3)
+        gdl_config.set(("extractor",), "timeout", 15)
+        gdl_config.set(("downloader",), "retries", 3)
+        gdl_config.set(("downloader",), "timeout", 15)
+
         extractor = find_extractor(url)
         if extractor is None:
             raise ExtractionError(f"gallery-dl cannot handle: {url}")
@@ -55,6 +69,7 @@ class GalleryDLExtractor(BaseExtractor):
         # Attempt to gather basic info without downloading everything
         items: list[dict[str, Any]] = []
         title = ""
+        start_scan = time.time()
         try:
             extractor.initialize()
             for msg in extractor:
@@ -74,11 +89,14 @@ class GalleryDLExtractor(BaseExtractor):
                         "duration": None,
                         "thumbnail": None,
                     })
-                    # Cap preview to 200 items
-                    if len(items) >= 200:
+                    # Cap preview to 20 items or 5 seconds to avoid rate limits and long wait times during "Starting..."
+                    if len(items) >= 20 or (time.time() - start_scan) > 5.0:
                         break
         except Exception as exc:
             logger.warning("gallery-dl metadata scan partial: %s", exc)
+
+        if len(items) == 0:
+            raise ExtractionError("gallery-dl bu linkten hiçbir içerik/metadata bulamadı veya 403 engeline takıldı.")
 
         is_playlist = len(items) > 1
 
@@ -137,6 +155,17 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.set(
             ("output",), "mode", "null",
         )
+        # Rate limit engellerini ve Reddit 403/429 hatalarını önle (Tarayıcı taklidi)
+        gdl_config.set(("extractor",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        gdl_config.set(("downloader",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        gdl_config.set(("extractor", "reddit"), "comments", 0)
+        gdl_config.set(("extractor", "reddit"), "morecomments", False)
+        gdl_config.set(("extractor",), "sleep-request", 0.5)
+        gdl_config.set(("extractor",), "sleep", 0.3)
+        gdl_config.set(("extractor",), "retries", 3)
+        gdl_config.set(("extractor",), "timeout", 15)
+        gdl_config.set(("downloader",), "retries", 3)
+        gdl_config.set(("downloader",), "timeout", 15)
 
         downloaded_count = 0
         last_file = ""
@@ -169,6 +198,9 @@ class GalleryDLExtractor(BaseExtractor):
 
             job.handle_url = _patched_handle_url
             job.run()
+
+            if downloaded_count == 0:
+                raise ExtractionError("gallery-dl bu linkten hiçbir dosya indiremedi (0 dosya indirildi).")
 
         except Exception as exc:
             raise ExtractionError(f"gallery-dl download failed: {exc}") from exc

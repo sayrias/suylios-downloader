@@ -580,10 +580,10 @@
       if (existing) {
         if (existing.status !== 'completed' && dl.status === 'completed') {
           showToast(`${dl.title || 'İndirme'} tamamlandı!`, 'success');
-          callApi('show_desktop_notification', ['Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`]);
+          callApi('show_desktop_notification', 'Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`);
         } else if (existing.status !== 'error' && dl.status === 'error') {
           showToast(`${dl.title || 'İndirme'} başarısız oldu!`, 'error');
-          callApi('show_desktop_notification', ['Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`]);
+          callApi('show_desktop_notification', 'Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`);
         }
         updateDownloadCard(dl);
       } else {
@@ -702,26 +702,42 @@
     progressFill.style.width = progress + '%';
     progressGlow.style.width = progress + '%';
     progressPercent.textContent = Math.round(progress) + '%';
-    progressSpeed.textContent = dl.speed ? formatSpeed(dl.speed) : '— MB/s';
-    
     const lang = window.CURRENT_LANG || 'tr';
     const completedText = lang === 'en' ? 'Completed' : 'Tamamlandı';
 
+    let pSpeed = dl.speed ? formatSpeed(dl.speed) : '— MB/s';
+    let pSize = '';
+    let pEta = '';
+
     if (dl.status === 'completed' || dl.status === 'complete') {
       const finalSize = dl.total_size || dl.downloaded_size || 0;
-      progressSize.textContent = finalSize > 0 ? `${formatSize(finalSize)} • ${completedText}` : completedText;
-      progressEta.textContent = '';
+      pSize = finalSize > 0 ? formatSize(finalSize) : '';
+      pEta = completedText;
     } else {
-      progressSize.textContent = formatSizeRange(dl.downloaded_size, dl.total_size);
-      if (dl.scheduled_at && dl.scheduled_at > 0) {
-        progressEta.textContent = lang === 'en' ? '⏰ Waiting for scheduled time...' : '⏰ İndirme zamanı bekleniyor...';
-      } else if (dl.status === 'converting') {
-        progressEta.textContent = dl.format_type === 'mp3' ? '🎵 MP3 formatına dönüştürülüyor...' : '⚙️ Dönüştürülüyor...';
-      } else if (dl.status === 'merging') {
-        progressEta.textContent = '📦 Video ve ses birleştiriliyor...';
-      } else {
-        progressEta.textContent = dl.eta ? formatEta(dl.eta) : (dl.downloaded_size > 0 ? '⏳ İndiriliyor...' : '🚀 Başlatılıyor...');
+      // Sadece total_size biliniyorsa veya total_size yokken indirilen byte varsa (ama kullanıcı boyut bilinmiyorsa gizle dediği için sadece total_size varsa gösterelim)
+      if (dl.total_size && dl.total_size > 0) {
+        pSize = formatSizeRange(dl.downloaded_size, dl.total_size);
       }
+      // total_size bilinmiyorsa pSize boş kalır ve UI'da gösterilmez.
+
+      if (dl.scheduled_at && dl.scheduled_at > 0) {
+        pEta = lang === 'en' ? '⏰ Waiting for scheduled time...' : '⏰ İndirme zamanı bekleniyor...';
+      } else if (dl.status === 'converting') {
+        pEta = dl.format_type === 'mp3' ? '🎵 MP3 formatına dönüştürülüyor...' : '⚙️ Dönüştürülüyor...';
+      } else if (dl.status === 'merging') {
+        pEta = '📦 Video ve ses birleştiriliyor...';
+      } else {
+        pEta = dl.eta ? formatEta(dl.eta) : (dl.downloaded_size > 0 ? '⏳ İndiriliyor...' : '🚀 Başlatılıyor...');
+      }
+    }
+
+    const detailsContainer = card.querySelector('.progress-details');
+    if (detailsContainer) {
+      const parts = [];
+      if (dl.status !== 'completed' && dl.status !== 'complete') parts.push(`<span class="progress-speed">${pSpeed}</span>`);
+      if (pSize) parts.push(`<span class="progress-size">${pSize}</span>`);
+      if (pEta) parts.push(`<span class="progress-eta">${pEta}</span>`);
+      detailsContainer.innerHTML = parts.join(' <span class="progress-separator">•</span> ');
     }
 
     // Status badge
@@ -1144,7 +1160,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.0' : 'Sürüm 1.3.0';
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.1' : 'Sürüm 1.3.1';
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';

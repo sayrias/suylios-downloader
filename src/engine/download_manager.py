@@ -169,8 +169,21 @@ def _get_extractor(url: str):
     from src.extractors.pixeldrain import PixeldrainExtractor
     from src.extractors.gofile import GofileExtractor
     from src.extractors.bunkr import BunkrExtractor
+    from src.extractors.reddit_ext import RedditExtractor
     from src.extractors.gallery_ext import GalleryDLExtractor
     from src.extractors.ytdlp_ext import YtdlpExtractor
+
+    url_lower = url.lower()
+
+    # Reddit linkleri özel RedditExtractor ile işleniyor (gallery-dl 403 ve yt-dlp sonsuz döngü sorunu)
+    if "reddit.com" in url_lower or "redd.it" in url_lower:
+        logger.debug("Reddit URL detected, using RedditExtractor: %s", url)
+        return RedditExtractor()
+
+    # YouTube linklerinde yt-dlp öncelikli
+    if "youtu" in url_lower:
+        logger.debug("YouTube URL detected, prioritizing YtdlpExtractor: %s", url)
+        return YtdlpExtractor()
 
     # Order matters: specific extractors first, yt-dlp as universal fallback.
     for cls in (
@@ -439,7 +452,19 @@ class DownloadManager:
             logger.info("Task %s – extracting metadata…", task.id)
             try:
                 task.status = TaskStatus.DOWNLOADING
-                info = extractor.extract_info(task.url)
+                try:
+                    info = extractor.extract_info(task.url)
+                except Exception as ext_err:
+                    if extractor.__class__.__name__ == "GalleryDLExtractor":
+                        logger.warning("GalleryDLExtractor failed for %s (%s), falling back to YtdlpExtractor...", task.url, ext_err)
+                        from src.extractors.ytdlp_ext import YtdlpExtractor
+                        extractor = YtdlpExtractor()
+                        extractor._task_quality = task.quality
+                        extractor._task_url = task.url
+                        extractor._site_settings = config.get("site_settings", {})
+                        info = extractor.extract_info(task.url)
+                    else:
+                        raise ext_err
                 task.title = info.get("title", task.url)
                 task.thumbnail = info.get("thumbnail") or ""
                 # Keep a copy of the playlist/archive title so we can restore it on finish
@@ -576,18 +601,42 @@ class DownloadManager:
                     logger.warning("Task %s – progress hook error: %s", task.id, hook_exc)
 
             try:
-                result_path = extractor.download(
-                    url=task.url,
-                    output_path=dl_dir,
-                    format_id=task.format_type,
-                    progress_hook=_progress_hook,
-                    start_time=task.start_time,
-                    end_time=task.end_time,
-                    embed_metadata=task.embed_metadata,
-                    download_subtitles=task.download_subtitles,
-                    subtitle_langs=task.subtitle_langs,
-                    keep_original=task.keep_original,
-                )
+                try:
+                    result_path = extractor.download(
+                        url=task.url,
+                        output_path=dl_dir,
+                        format_id=task.format_type,
+                        progress_hook=_progress_hook,
+                        start_time=task.start_time,
+                        end_time=task.end_time,
+                        embed_metadata=task.embed_metadata,
+                        download_subtitles=task.download_subtitles,
+                        subtitle_langs=task.subtitle_langs,
+                        keep_original=task.keep_original,
+                    )
+                except Exception as dl_err:
+                    if extractor.__class__.__name__ == "GalleryDLExtractor":
+                        logger.warning("GalleryDLExtractor download failed (%s), falling back to YtdlpExtractor...", dl_err)
+                        from src.extractors.ytdlp_ext import YtdlpExtractor
+                        extractor = YtdlpExtractor()
+                        extractor._task_quality = task.quality
+                        extractor._task_url = task.url
+                        extractor._site_settings = config.get("site_settings", {})
+                        result_path = extractor.download(
+                            url=task.url,
+                            output_path=dl_dir,
+                            format_id=task.format_type,
+                            progress_hook=_progress_hook,
+                            start_time=task.start_time,
+                            end_time=task.end_time,
+                            embed_metadata=task.embed_metadata,
+                            download_subtitles=task.download_subtitles,
+                            subtitle_langs=task.subtitle_langs,
+                            keep_original=task.keep_original,
+                        )
+                    else:
+                        raise dl_err
+
                 if task._cancel_event.is_set():
                     task.status = TaskStatus.CANCELLED
                     return
@@ -649,6 +698,22 @@ class DownloadManager:
                                         os.rename(temp_out, result_path)
                         except Exception as trim_err:
                             logger.error("Trimming failed: %s", trim_err)
+
+                # İndirme tamamlandı demeden önce, klasörün veya dosyanın gerçekten var ve içinin dolu olduğunu kontrol et
+                check_target = result_path or dl_dir
+                is_empty = False
+                if check_target and os.path.exists(check_target):
+                    if os.path.isdir(check_target):
+                        if not os.listdir(check_target):
+                            is_empty = True
+                    elif os.path.isfile(check_target):
+                        if os.path.getsize(check_target) == 0:
+                            is_empty = True
+                else:
+                    is_empty = True
+
+                if is_empty:
+                    raise Exception("İndirme işlemi bitti ancak hedef klasörde hiçbir dosya oluşturulmadı. İçerik platform tarafından engellenmiş veya gizli olabilir.")
 
                 task.status = TaskStatus.COMPLETED
                 task.progress = 100.0

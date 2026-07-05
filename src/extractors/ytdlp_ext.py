@@ -89,9 +89,16 @@ class YtdlpExtractor(BaseExtractor):
             ) from exc
 
         ydl_opts = self._base_opts(url)
-        ydl_opts["extract_flat"] = "in_playlist"
-        if "list=rd" in url.lower() or "start_radio=" in url.lower():
+        check_url_ei = url.lower()
+        if "list=rd" in check_url_ei or "start_radio=" in check_url_ei:
             ydl_opts["playlistend"] = 25
+            ydl_opts["extract_flat"] = "in_playlist"
+        elif "reddit" in check_url_ei or "redd.it" in check_url_ei:
+            # Reddit galerilerinde extract_flat kullanmıyoruz — yt-dlp'nin tam metadata'yı almasına izin veriyoruz
+            # max_redirect sonsuz döngüyü önler
+            ydl_opts["max_redirects"] = 5
+        else:
+            ydl_opts["extract_flat"] = "in_playlist"
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -286,6 +293,16 @@ class YtdlpExtractor(BaseExtractor):
             }
         if "list=rd" in check_url or "start_radio=" in check_url or "list=ul" in check_url or "list=ll" in check_url:
             opts["playlistend"] = 50
+        if "reddit" in check_url or "redd.it" in check_url:
+            opts["sleep_interval_requests"] = 0.5
+            opts["sleep_interval"] = 0.5
+            opts["retries"] = 3
+            opts["fragment_retries"] = 3
+            opts["ignoreerrors"] = True
+            opts["max_redirects"] = 5
+            opts["extractor_args"] = opts.get("extractor_args", {})
+            opts["extractor_args"]["reddit"] = {"max_comments": ["0"]}
+            opts["extractor_args"]["generic"] = {"impersonate": ["chrome"]}
 
         # FFmpeg location
         ffmpeg = config.get_ffmpeg_path()
