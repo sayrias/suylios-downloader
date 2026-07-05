@@ -205,10 +205,14 @@
         const notesEl = $('#update-modal-notes');
         const nowBtn = $('#btn-update-now');
         const remindBtn = $('#btn-update-remind');
-        if (!modal) return;
-
         if (verEl) verEl.textContent = 'v' + res.latest_version;
-        if (notesEl) notesEl.textContent = res.release_notes || 'Yeni geliştirmeler ve hata düzeltmeleri içerir.';
+        if (notesEl) {
+          let rawNotes = res.release_notes || 'Yeni geliştirmeler ve hata düzeltmeleri içerir.';
+          if (rawNotes.includes('---')) rawNotes = rawNotes.split('---')[0];
+          if (rawNotes.includes('Which File Should I Download?')) rawNotes = rawNotes.split('Which File Should I Download?')[0];
+          rawNotes = rawNotes.replace(/###\s*/g, '').replace(/\*\*/g, '').replace(/\*/g, '• ').trim();
+          notesEl.textContent = rawNotes;
+        }
         
         nowBtn.onclick = async () => {
           const progContainer = $('#update-progress-container');
@@ -1197,7 +1201,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.2' : 'Sürüm 1.3.2';
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.3' : 'Sürüm 1.3.3';
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';

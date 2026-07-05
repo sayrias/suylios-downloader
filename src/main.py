@@ -73,7 +73,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -804,12 +804,15 @@ class Bridge:
                 if not portable_folder.exists():
                     portable_folder = upd_dir
                 
-                bat_path = upd_dir / "update.bat"
+                # Bat dosyasını UpdateTemp klasörü DIŞINA koyuyoruz ki rmdir çalışınca script silinip yarıda kesilmesin!
+                launcher_dir = Path(appdata) / "SuyliosDownloader"
+                bat_path = launcher_dir / "update_launcher.bat"
                 bat_content = f'''@echo off
-timeout /t 2 /nobreak >nul
+title Suylios Downloader - Guncelleniyor...
+timeout /t 3 /nobreak >nul
 xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}\\"
 rmdir /s /q "{upd_dir}"
-start "" "{current_exe}"
+start "" /D "{app_dir}" "{current_exe}"
 del "%~f0"
 '''
                 with open(bat_path, "w", encoding="utf-8") as bf:
