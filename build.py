@@ -31,11 +31,14 @@ BUILD_DIR = PROJECT_ROOT / "build"
 BIN_DIR = PROJECT_ROOT / "bin"
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.1.0"
+try:
+    from src.main import APP_VERSION
+except Exception:
+    APP_VERSION = "1.3.4"
 APP_PUBLISHER = "Suylios"
 APP_URL = "https://github.com/sayrias/suylios-downloader"
 APP_EXE = "suylios.exe"
-DEFAULT_DIR = r"{autopf}\Suylios Downloader"
+DEFAULT_DIR = r"{localappdata}\Programs\Suylios Downloader"
 
 INFO_TR = """=========================================================
    Suylios Downloader - Kurulum Sihirbazına Hoş Geldiniz

@@ -73,7 +73,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -818,7 +818,14 @@ del "%~f0"
                 with open(bat_path, "w", encoding="utf-8") as bf:
                     bf.write(bat_content)
 
-                subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                if "Program Files" in str(app_dir) or not os.access(str(app_dir), os.W_OK):
+                    try:
+                        import ctypes
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", str(bat_path), None, str(launcher_dir), 0)
+                    except Exception:
+                        subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(launcher_dir))
+                else:
+                    subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(launcher_dir))
                 self.force_quit()
 
             except Exception as exc:
