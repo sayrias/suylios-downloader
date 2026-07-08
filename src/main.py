@@ -79,7 +79,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -766,6 +766,21 @@ class Bridge:
                 import zipfile
                 import shutil
                 
+                def _send_progress(progress, status, downloaded=0, total=0, error=""):
+                    """Send progress event to UI."""
+                    try:
+                        if self._window:
+                            js = (
+                                f"window.dispatchEvent(new CustomEvent('updateProgress', "
+                                f"{{detail: {{progress: {progress}, downloaded: {downloaded}, "
+                                f"total: {total}, status: '{status}', error: '{error}'}}}}))"
+                            )
+                            self._window.evaluate_js(js)
+                    except Exception:
+                        pass
+                
+                _send_progress(0, "downloading")
+                
                 appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
                 upd_dir = Path(appdata) / "SuyliosDownloader" / "UpdateTemp"
                 if upd_dir.exists():
@@ -774,10 +789,12 @@ class Bridge:
                 
                 zip_path = upd_dir / "update.zip"
                 
+                # Download with progress
                 req = urllib.request.Request(download_url, headers={"User-Agent": "SuyliosDownloader"})
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     total_size = int(resp.headers.get("Content-Length", 0))
                     downloaded = 0
+                    last_report = 0
                     
                     with open(zip_path, "wb") as f:
                         while True:
@@ -786,20 +803,17 @@ class Bridge:
                                 break
                             f.write(chunk)
                             downloaded += len(chunk)
-                            percent = min(100, int((downloaded / total_size) * 100)) if total_size > 0 else 0
+                            percent = min(99, int((downloaded / total_size) * 100)) if total_size > 0 else 0
                             
-                            try:
-                                if self._window:
-                                    self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{progress: {percent}, downloaded: {downloaded}, total: {total_size}, status: 'downloading'}}}}));")
-                            except Exception:
-                                pass
+                            # Report every 2% to avoid flooding
+                            if percent >= last_report + 2 or percent >= 99:
+                                _send_progress(percent, "downloading", downloaded, total_size)
+                                last_report = percent
 
-                try:
-                    if self._window:
-                        self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{progress: 100, status: 'extracting'}}}}));")
-                except Exception:
-                    pass
+                _send_progress(100, "extracting")
+                time.sleep(0.5)  # Give UI time to render
 
+                # Extract zip
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     zf.extractall(upd_dir)
                     
@@ -807,45 +821,99 @@ class Bridge:
                 
                 current_exe = sys.executable if getattr(sys, "frozen", False) else ""
                 if not current_exe or not current_exe.endswith(".exe"):
+                    _send_progress(100, "done")
                     os.startfile(str(upd_dir))
                     return
 
                 app_dir = Path(current_exe).parent
+                current_exe_name = Path(current_exe).name
+                current_pid = os.getpid()
+                
                 portable_folder = upd_dir / "Suylios-Portable"
                 if not portable_folder.exists():
-                    portable_folder = upd_dir
+                    # Try to find the first subfolder that contains an exe
+                    for item in upd_dir.iterdir():
+                        if item.is_dir() and any(item.glob("*.exe")):
+                            portable_folder = item
+                            break
+                    else:
+                        portable_folder = upd_dir
                 
-                # Bat dosyasını UpdateTemp klasörü DIŞINA koyuyoruz ki rmdir çalışınca script silinip yarıda kesilmesin!
+                _send_progress(100, "installing")
+                time.sleep(0.3)
+                
+                # Create a robust updater bat script
                 launcher_dir = Path(appdata) / "SuyliosDownloader"
                 bat_path = launcher_dir / "update_launcher.bat"
+                
                 bat_content = f'''@echo off
+chcp 65001 >nul 2>&1
 title Suylios Downloader - Guncelleniyor...
-timeout /t 3 /nobreak >nul
-xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}\\"
-rmdir /s /q "{upd_dir}"
-start "" /D "{app_dir}" "{current_exe}"
-del "%~f0"
+
+echo.
+echo ============================================
+echo   Suylios Downloader Guncelleniyor...
+echo ============================================
+echo.
+echo [1/4] Uygulama kapatiliyor...
+
+:: Kill the running process by PID first, then by name as fallback
+taskkill /PID {current_pid} /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+
+:: Double-check: kill by exe name if still running
+taskkill /IM "{current_exe_name}" /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+
+echo [2/4] Dosyalar kopyalaniyor...
+xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}\\" >nul 2>&1
+
+if errorlevel 1 (
+    echo.
+    echo [HATA] Dosya kopyalama basarisiz! Yonetici olarak calistirmayi deneyin.
+    echo Guncelleme dosyalari burada: {upd_dir}
+    pause
+    exit /b 1
+)
+
+echo [3/4] Gecici dosyalar temizleniyor...
+rmdir /s /q "{upd_dir}" >nul 2>&1
+
+echo [4/4] Uygulama baslatiliyor...
+timeout /t 1 /nobreak >nul
+
+start "" "{app_dir}\\{current_exe_name}"
+
+echo.
+echo Guncelleme tamamlandi!
+timeout /t 2 /nobreak >nul
+
+:: Clean up this bat file
+del "%~f0" >nul 2>&1
 '''
                 with open(bat_path, "w", encoding="utf-8") as bf:
                     bf.write(bat_content)
 
+                logger.info("Update bat written to %s", bat_path)
+                logger.info("Portable folder: %s", portable_folder)
+                logger.info("App dir: %s", app_dir)
+                
+                # Launch the updater bat
                 if "Program Files" in str(app_dir) or not os.access(str(app_dir), os.W_OK):
                     try:
                         import ctypes
-                        ctypes.windll.shell32.ShellExecuteW(None, "runas", str(bat_path), None, str(launcher_dir), 0)
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", str(bat_path), None, str(launcher_dir), 1)
                     except Exception:
-                        subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(launcher_dir))
+                        subprocess.Popen(["cmd", "/c", str(bat_path)], shell=False, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=str(launcher_dir))
                 else:
-                    subprocess.Popen([str(bat_path)], shell=True, creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(launcher_dir))
+                    subprocess.Popen(["cmd", "/c", str(bat_path)], shell=False, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=str(launcher_dir))
+                
+                time.sleep(1)
                 self.force_quit()
 
             except Exception as exc:
                 logger.error("Update failed: %s", exc)
-                try:
-                    if self._window:
-                        self._window.evaluate_js(f"window.dispatchEvent(new CustomEvent('updateProgress', {{detail: {{status: 'error', error: '{str(exc)}'}}}}));")
-                except:
-                    pass
+                _send_progress(0, "error", error=str(exc).replace("'", "\\'"))
 
         threading.Thread(target=_update_thread, daemon=True).start()
         return {"ok": True, "async": True}

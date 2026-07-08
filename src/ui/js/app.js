@@ -230,27 +230,43 @@
             if (status === 'downloading') {
               if (progText) progText.textContent = lang === 'en' ? 'Downloading...' : 'İndiriliyor...';
               if (progPercent) progPercent.textContent = progress + '%';
-              if (progFill) progFill.style.width = progress + '%';
+              if (progFill) {
+                progFill.style.width = progress + '%';
+                progFill.style.animation = 'none';
+              }
               if (progDetails && total > 0) {
                 const dlMB = (downloaded / (1024 * 1024)).toFixed(1);
                 const totMB = (total / (1024 * 1024)).toFixed(1);
                 progDetails.textContent = `${dlMB} MB / ${totMB} MB`;
               }
             } else if (status === 'extracting') {
-              if (progText) progText.textContent = lang === 'en' ? 'Installing...' : 'Kuruluyor...';
+              if (progText) progText.textContent = lang === 'en' ? 'Extracting files...' : 'Dosyalar çıkarılıyor...';
               if (progPercent) progPercent.textContent = '100%';
-              if (progFill) progFill.style.width = '100%';
-              if (progDetails) progDetails.textContent = lang === 'en' ? 'Applying update...' : 'Güncelleme uygulanıyor...';
+              if (progFill) {
+                progFill.style.width = '100%';
+                progFill.style.animation = 'updatePulse 1.5s ease-in-out infinite';
+              }
+              if (progDetails) progDetails.textContent = lang === 'en' ? 'Please wait...' : 'Lütfen bekleyin...';
+            } else if (status === 'installing') {
+              if (progText) progText.textContent = lang === 'en' ? 'Installing update...' : 'Güncelleme kuruluyor...';
+              if (progPercent) progPercent.textContent = '100%';
+              if (progFill) {
+                progFill.style.width = '100%';
+                progFill.style.animation = 'updatePulse 1.5s ease-in-out infinite';
+              }
+              if (progDetails) progDetails.textContent = lang === 'en' ? 'Restarting application...' : 'Uygulama yeniden başlatılıyor...';
             } else if (status === 'error') {
               if (progText) {
-                progText.textContent = lang === 'en' ? 'Error!' : 'Hata!';
+                progText.textContent = lang === 'en' ? 'Update failed!' : 'Güncelleme başarısız!';
                 progText.style.color = '#ef4444';
               }
-              if (progDetails) progDetails.textContent = error;
+              if (progFill) progFill.style.animation = 'none';
+              if (progDetails) progDetails.textContent = error || 'Unknown error';
               setTimeout(() => {
                 if (btnsContainer) btnsContainer.style.display = 'flex';
                 if (progContainer) progContainer.style.display = 'none';
-              }, 4000);
+                if (progText) progText.style.color = '';
+              }, 5000);
             }
           });
 
