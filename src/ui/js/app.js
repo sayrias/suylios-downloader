@@ -116,6 +116,7 @@
     bindKeyboard();
     bindThemes();
     bindSiteSettings();
+    bindAddSiteModal();
     setupCustomSelects();
     waitForApi();
   }
@@ -1281,7 +1282,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.7');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.8');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
@@ -1441,6 +1442,7 @@
       if (el) el.checked = settings.start_minimized;
     }
     syncCustomSelects();
+    renderCustomSites();
   }
 
   async function saveCurrentSettings() {
@@ -1469,6 +1471,7 @@
       start_minimized: $('#setting-start-minimized')?.checked ?? false,
       theme: document.body.dataset.theme || 'suylios',
       site_settings: state.settings?.site_settings || {},
+      custom_sites: state.settings?.custom_sites || [],
     };
 
     const result = await callApi('save_settings', JSON.stringify(settings));
@@ -1712,6 +1715,220 @@
         saveCurrentSettings();
         modal?.classList.add('hidden');
         showToast('Platform ayarları kaydedildi', 'success');
+      });
+    }
+  }
+
+  function renderCustomSites() {
+    const grid = document.getElementById('custom-sites-grid');
+    if (!grid) return;
+    const customSites = state.settings?.custom_sites || [];
+    if (customSites.length === 0) {
+      grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 28px; color: var(--text-muted); font-size: 13.5px; border: 1px dashed var(--border-color); border-radius: 12px; background: var(--bg-secondary);">Henüz özel bir site klasörü eklenmedi. &quot;Yeni Site Ekle&quot; butonuna basarak 1775+ desteklenen platform arasından seçip ekleyebilirsiniz.</div>';
+      return;
+    }
+
+    grid.innerHTML = customSites.map(item => {
+      const siteCfg = state.settings?.site_settings?.[item.key] || {};
+      const folderName = siteCfg.folder || item.folder || item.name;
+      const engineTag = item.engine || 'yt-dlp';
+      const tagClass = engineTag === 'gallery-dl' ? 'tag-purple' : (engineTag === 'cyberdrop-dl' ? 'tag-cyan' : 'tag-green');
+      return `
+        <div class="site-card glass-panel" style="position: relative;">
+          <div class="site-card-header">
+            <div class="site-logo">
+              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" class="site-icon-img" alt="${item.name}">
+            </div>
+            <div class="site-title">
+              <h4>${item.name}</h4>
+              <span>downloads/${folderName}</span>
+            </div>
+          </div>
+          <div class="site-tags">
+            <span class="site-tag ${tagClass}">${engineTag}</span>
+            <span class="site-tag tag-cyan">${item.features ? item.features.slice(0, 16) + (item.features.length > 16 ? '...' : '') : 'Özel Alt Klasör'}</span>
+          </div>
+          <div style="display: flex; gap: 8px; width: 100%; margin-top: auto;">
+            <button class="btn-site-config glow-btn" data-site="${item.key}" data-name="${item.name}" data-folder="${folderName}" style="flex: 1;">⚙️ Ayarla</button>
+            <button class="btn-delete-custom-site btn-secondary" data-key="${item.key}" data-name="${item.name}" title="Bu siteyi ve ayarlarını kaldır" style="padding: 6px 10px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid rgba(255,90,90,0.3); color: #ff5a5a; background: rgba(255,90,90,0.08); cursor: pointer;">🗑️</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Rebind config modal triggers for these dynamic cards
+    bindSiteSettings();
+
+    // Bind delete triggers
+    grid.querySelectorAll('.btn-delete-custom-site').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = btn.dataset.key;
+        const name = btn.dataset.name;
+        if (!state.settings) state.settings = {};
+        if (state.settings.custom_sites) {
+          state.settings.custom_sites = state.settings.custom_sites.filter(s => s.key !== key);
+        }
+        if (state.settings.site_settings && state.settings.site_settings[key]) {
+          delete state.settings.site_settings[key];
+        }
+        saveCurrentSettings();
+        renderCustomSites();
+        showToast(`${name} kartı ve tüm ayarları silindi`, 'info');
+      });
+    });
+  }
+
+  function bindAddSiteModal() {
+    const modal = document.getElementById('add-site-modal');
+    const openBtn = document.getElementById('btn-add-custom-site');
+    const closeBtn = document.getElementById('btn-close-add-site-modal');
+    const cancelBtn = document.getElementById('btn-cancel-add-site');
+    const confirmBtn = document.getElementById('btn-confirm-add-site');
+    const searchInput = document.getElementById('add-site-search');
+    const listContainer = document.getElementById('add-site-list');
+    const countSpan = document.getElementById('add-site-selected-count');
+
+    if (!modal || !openBtn) return;
+
+    let availableSites = [];
+    let selectedSiteKeys = new Set();
+
+    const BUILTIN_KEYS = new Set([
+      'youtube', 'bunkr', 'gofile', 'pixeldrain', 'tiktok', 'twitter', 'instagram', 'reddit',
+      'pornhub', 'xvideos', 'rule34', 'hanime', 'hitomi', 'ehentai', 'twitch', 'vimeo',
+      'soundcloud', 'dailymotion', 'imgur', 'flickr', 'kemono', 'coomer', 'erome', 'xhamster',
+      'cyberdrop', 'mega', '4chan', 'bluesky', 'other'
+    ]);
+
+    async function openModal() {
+      modal.classList.remove('hidden');
+      selectedSiteKeys.clear();
+      updateSelectedCount();
+      if (searchInput) searchInput.value = '';
+
+      if (listContainer) {
+        listContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">Siteler yükleniyor...</div>';
+      }
+
+      // Load supported sites if not cached
+      if (!window._cachedSupportedSites) {
+        try {
+          const res = await callApi('get_supported_sites');
+          if (Array.isArray(res)) window._cachedSupportedSites = res;
+        } catch (e) {
+          console.error('Failed to get_supported_sites via API:', e);
+        }
+      }
+      const allSites = window._cachedSupportedSites || [];
+
+      // Filter out built-in and already added custom sites
+      const existingCustomDomains = new Set((state.settings?.custom_sites || []).map(s => s.domain.toLowerCase()));
+      const existingCustomKeys = new Set((state.settings?.custom_sites || []).map(s => s.key.toLowerCase()));
+
+      availableSites = allSites.filter(item => {
+        const dom = item.domain.toLowerCase();
+        const cleanKey = dom.replace(/\./g, '_').replace(/[^a-z0-9_]/g, '');
+        const nameKey = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (BUILTIN_KEYS.has(cleanKey) || BUILTIN_KEYS.has(nameKey)) return false;
+        if (existingCustomDomains.has(dom) || existingCustomKeys.has(cleanKey)) return false;
+        return true;
+      });
+
+      renderFilteredList('');
+    }
+
+    function updateSelectedCount() {
+      if (countSpan) countSpan.textContent = `${selectedSiteKeys.size} site seçildi`;
+    }
+
+    function renderFilteredList(query) {
+      if (!listContainer) return;
+      const q = (query || '').trim().toLowerCase();
+      const filtered = availableSites.filter(s => {
+        if (!q) return true;
+        return s.name.toLowerCase().includes(q) || s.domain.toLowerCase().includes(q) || (s.features && s.features.toLowerCase().includes(q));
+      }).slice(0, 150); // limit for fast DOM render
+
+      if (filtered.length === 0) {
+        listContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">Aramanızla eşleşen yeni site bulunamadı.</div>';
+        return;
+      }
+
+      listContainer.innerHTML = filtered.map(item => {
+        const cleanKey = item.domain.replace(/\./g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+        const checked = selectedSiteKeys.has(cleanKey) ? 'checked' : '';
+        const tagClass = item.engine === 'gallery-dl' ? 'tag-purple' : (item.engine === 'cyberdrop-dl' ? 'tag-cyan' : 'tag-green');
+        return `
+          <label class="add-site-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background 0.15s; border-bottom: 1px solid rgba(255,255,255,0.03);">
+            <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+              <input type="checkbox" class="add-site-chk" data-key="${cleanKey}" ${checked} style="width: 16px; height: 16px; cursor: pointer;">
+              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" style="width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;" alt="">
+              <div style="display: flex; flex-direction: column; overflow: hidden;">
+                <span style="font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</span>
+                <span style="font-size: 11px; color: var(--text-muted);">${item.domain}</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+              <span class="site-tag ${tagClass}" style="font-size: 10px; padding: 2px 6px;">${item.engine}</span>
+            </div>
+          </label>
+        `;
+      }).join('');
+
+      listContainer.querySelectorAll('.add-site-chk').forEach(chk => {
+        chk.addEventListener('change', (e) => {
+          const k = chk.dataset.key;
+          if (chk.checked) selectedSiteKeys.add(k);
+          else selectedSiteKeys.delete(k);
+          updateSelectedCount();
+        });
+      });
+    }
+
+    openBtn.addEventListener('click', (e) => { e.preventDefault(); openModal(); });
+    if (closeBtn) closeBtn.addEventListener('click', () => modal.classList.add('hidden'));
+    if (cancelBtn) cancelBtn.addEventListener('click', () => modal.classList.add('hidden'));
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => renderFilteredList(e.target.value));
+    }
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', () => {
+        if (selectedSiteKeys.size === 0) {
+          showToast('Lütfen eklemek için en az 1 site seçin', 'warning');
+          return;
+        }
+
+        if (!state.settings) state.settings = {};
+        if (!state.settings.custom_sites) state.settings.custom_sites = [];
+
+        let addedCount = 0;
+        const allSites = window._cachedSupportedSites || [];
+
+        selectedSiteKeys.forEach(key => {
+          const found = allSites.find(s => s.domain.replace(/\./g, '_').replace(/[^a-zA-Z0-9_]/g, '') === key);
+          if (found) {
+            const cleanFolder = found.name.replace(/[^a-zA-Z0-9_-]/g, '') || found.name;
+            state.settings.custom_sites.push({
+              key: key,
+              name: found.name,
+              domain: found.domain,
+              folder: cleanFolder,
+              engine: found.engine,
+              features: found.features
+            });
+            addedCount++;
+          }
+        });
+
+        saveCurrentSettings();
+        renderCustomSites();
+        modal.classList.add('hidden');
+        showToast(`${addedCount} yeni site klasörü eklendi!`, 'success');
       });
     }
   }

@@ -79,7 +79,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -538,6 +538,20 @@ class Bridge:
             "version": APP_VERSION,
             "github_url": APP_GITHUB,
         }
+
+    def get_supported_sites(self) -> list[dict[str, Any]]:
+        """Return full list of supported sites from SUPPORTED_SITES.json."""
+        try:
+            root_dir = Path(_resolve_ui_path()).parent.parent.parent
+            json_path = root_dir / "SUPPORTED_SITES.json"
+            if not json_path.exists():
+                json_path = Path(__file__).resolve().parent.parent / "SUPPORTED_SITES.json"
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as exc:
+            logger.error("Failed to load SUPPORTED_SITES.json: %s", exc)
+        return []
 
     # ------------------------------------------------------------------
     # Localization / Locales

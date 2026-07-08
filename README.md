@@ -1,18 +1,41 @@
-# Suylios Downloader
+<div align="center">
 
-**Next-Generation Cyber-Aesthetic Hybrid Media & Archive Downloader.**
+# ⚡ SUYLIOS DOWNLOADER ⚡
 
-[![Version](https://img.shields.io/badge/version-1.3.7-00f0ff?style=for-the-badge&logo=appveyor)](https://github.com/sayrias/suylios-downloader)
-[![License: MIT](https://img.shields.io/badge/License-MIT-a855f7?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-00e87a?style=for-the-badge&logo=windows)](https://github.com/sayrias/suylios-downloader)
+**Next-Generation Cyber-Aesthetic Hybrid Media & Archive Downloader**
+
+<p align="center">
+  <a href="https://github.com/sayrias/suylios-downloader">
+    <img src="https://img.shields.io/badge/version-1.3.8-00f0ff?style=for-the-badge&logo=appveyor&logoColor=00f0ff&labelColor=0d1117" alt="Version">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-a855f7?style=for-the-badge&logo=opensourceinitiative&logoColor=a855f7&labelColor=0d1117" alt="License">
+  </a>
+  <a href="https://github.com/sayrias/suylios-downloader">
+    <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-00e87a?style=for-the-badge&logo=windows&logoColor=00e87a&labelColor=0d1117" alt="Platform">
+  </a>
+  <a href="SUPPORTED_SITES.md">
+    <img src="https://img.shields.io/badge/Supported%20Sites-1775%2B-ff6b9d?style=for-the-badge&logo=airplayvideo&logoColor=ff6b9d&labelColor=0d1117" alt="Supported Sites">
+  </a>
+</p>
+
+<p align="center">
+  <a href="#-overview"><b>🌌 Overview</b></a> •
+  <a href="#-key-features--highlights"><b>✨ Key Features</b></a> •
+  <a href="#-interface-preview"><b>📸 Screenshots</b></a> •
+  <a href="SUPPORTED_SITES.md"><b>🌐 Supported Sites (1775+)</b></a> •
+  <a href="#-quick-start-guide"><b>🚀 Quick Start</b></a>
+</p>
 
 ---
 
+</div>
+
 ## 🌌 Overview
 
-**Suylios Downloader** is a futuristic desktop media command center built with a high-performance **Python/PyWebView** engine and an ultra-responsive **Glassmorphism UI**. Designed for speed, privacy, and seamless user experience, it bridges the gap between complex command-line extractors (`yt-dlp`, embedded `FFmpeg`) and sleek modern software design.
+**Suylios Downloader** is a futuristic desktop media command center built with a high-performance **Python/PyWebView** engine and an ultra-responsive **Glassmorphism UI**. Designed for maximum speed, local privacy, and seamless user ergonomics, it bridges the gap between powerful command-line extractors (`yt-dlp`, `gallery-dl`, `cyberdrop-dl`, embedded `FFmpeg`) and state-of-the-art software design.
 
-Whether you are downloading 4K/8K 60fps YouTube playlists, capturing social media reels, archiving entire albums from cloud storage hosts, or extracting lossless studio-grade audio, Suylios handles it effortlessly with single-click automation.
+Whether you are downloading **4K/8K 60fps YouTube playlists**, capturing social media reels, archiving entire albums from cloud storage hosts, or extracting lossless studio-grade audio, Suylios handles it effortlessly with single-click automation and multi-threaded precision.
 
 ---
 
@@ -20,54 +43,78 @@ Whether you are downloading 4K/8K 60fps YouTube playlists, capturing social medi
 
 ### 🎨 Cyber-Aesthetic Design & Visual Themes
 Experience a breathtaking interface crafted with glassmorphism panels, neon glow indicators, and smooth micro-animations. Suylios adapts to your mood and workspace with **6 Curated Aesthetic Themes**:
-- 🌐 **Suylios Cyber (Default):** Deep space obsidian background paired with vibrant electric cyan and neon purple accents.
-- ☀️ **Light Theme (Day):** A crisp, ultra-clean white and silver aesthetic designed for bright room lighting and maximum readability.
-- 🌑 **Dark Theme (Slate):** A sophisticated charcoal metallic slate finish for minimalist setups.
-- 💻 **Emerald Hacker (Green):** Matrix-inspired deep black canvas with glowing terminal green highlights.
-- 🔴 **Crimson Night (Red):** Bold dark ruby styling with aggressive crimson indicators.
-- 🌅 **Sunset Gold (Yellow):** Warm, luxurious golden amber accents over dark velvet backgrounds.
+
+| Theme | Aesthetic Character | Ideal Workspace |
+| :--- | :--- | :--- |
+| 🌐 **Suylios Cyber** *(Default)* | Deep space obsidian paired with electric cyan and neon purple highlights. | Futuristic & Cyberpunk setups |
+| ☀️ **Light Theme (Day)** | Crisp, ultra-clean white and silver finish designed for maximum legibility. | Bright studio & office lighting |
+| 🌑 **Dark Theme (Slate)** | Sophisticated charcoal metallic slate for pure minimalist focus. | Clean dark-mode workstations |
+| 💻 **Emerald Hacker** | Matrix-inspired deep black canvas with glowing terminal green highlights. | Coding & terminal enthusiasts |
+| 🔴 **Crimson Night** | Bold dark ruby styling with aggressive crimson glow indicators. | High-contrast night sessions |
+| 🌅 **Sunset Gold** | Warm, luxurious golden amber accents over dark velvet backgrounds. | Cozy evening setups |
+
+---
+
+### 🗂️ Universal Platform Support & Custom Site Folders
+Suylios powers through **1,775+ supported platforms** seamlessly across three integrated extraction engines (`yt-dlp`, `gallery-dl`, `cyberdrop-dl`).
+
+* **Mainstream Media:** YouTube (up to 8K HDR + Lossless Audio merging), Instagram Reels & Stories, TikTok (Watermark-free), Twitter / X, Twitch, Reddit, Vimeo, Dailymotion, Pinterest, Facebook, and Bilibili.
+* **Cloud & File Hosts:** Direct session integration and fast multi-threaded downloading for **Gofile**, **Pixeldrain**, **Mega.nz**, and **Bunkr / balbums.st**.
+* **+18 & VIP Archives:** Dedicated extraction engines for adult media and galleries, featuring built-in **VIP Cookie Authentication** (e.g., ExHentai / E-Hentai passhash cookies) to bypass login barriers securely.
+* **✨ Custom Site Folders:** Easily create your own dedicated subfolders right from the UI! Use the **"Yeni Site Ekle"** modal to search and multi-select from over **1,775+ platforms** and add dedicated custom cards with independent quality and cookie settings.
+
+---
 
 ### 📦 Smart Auto-Archiving & Album Compression
-Automate your digital storage pipeline. When downloading multi-file cloud folders or media galleries (Gofile, Reddit, YouTube Playlists), Suylios can automatically compress and bundle completed downloads on the fly into **ZIP, WinRAR (.rar), 7-Zip (.7z), or TAR.GZ** formats.
-- **In-Folder Archive Generation:** Archives are safely created inside their respective album directories without polluting your main downloads folder.
-- **Optional Original File Cleanup:** Enable **Delete Original Files After Archiving** from settings to automatically remove uncompressed source files once the archive verification succeeds, keeping your storage drive ultra-tidy.
-- **Independent Home Controls:** Toggle quick single-task compression directly from the main control bar with the glowing `📦 Arşiv Oluştur` button without changing global defaults.
+Automate your digital storage pipeline. When downloading multi-file cloud folders or media galleries, Suylios can automatically compress and bundle completed downloads on the fly into **ZIP, WinRAR (.rar), 7-Zip (.7z), or TAR.GZ** formats.
+* **In-Folder Archive Generation:** Archives are safely created inside their respective album directories without polluting your main downloads folder.
+* **Optional Original File Cleanup:** Enable **Delete Original Files After Archiving** from settings to automatically remove uncompressed source files once the archive verification succeeds, keeping your storage drive ultra-tidy.
+* **Independent Home Controls:** Toggle quick single-task compression directly from the main control bar with the glowing `📦 Arşiv Oluştur` button without changing global defaults.
+
+---
 
 ### ⚡ Smart Link Capture (Ctrl+V Automation)
 No need to manually click input boxes. When the application window is active, simply press **`Ctrl+V`** to paste any copied URL from your clipboard. Suylios instantly parses the link, detects the platform, applies your preferred quality preferences, and launches the download queue automatically.
 
-### 🌐 Universal Platform & Host Support
-- **Mainstream Media:** YouTube (up to 8K HDR + Lossless Audio merging), Instagram Reels & Stories, TikTok (Watermark-free), Twitter / X, Twitch, Reddit, Vimeo, Dailymotion, Pinterest, Facebook, and Bilibili.
-- **Cloud & File Hosts:** Direct session integration and fast multi-threaded downloading for **Gofile**, **Pixeldrain**, and **Bunkr / balbums.st**.
-- **+18 & VIP Archives:** Dedicated extraction engines for adult media and galleries, featuring built-in **VIP Cookie Authentication** (e.g., ExHentai / E-Hentai passhash cookies) to bypass login barriers securely.
+---
 
 ### 🎵 Dynamic Format & Studio Audio Conversion
 Easily switch between Video and Audio modes. Suylios utilizes its isolated, embedded `FFmpeg` engine to convert playlists into pristine **320 kbps HQ MP3**, **24-bit Lossless FLAC**, **256 kbps AAC**, or lightweight audio formats on the fly—without requiring external system installations.
 
-### 📜 Rich Media Download History
-Keep track of your digital library with an redesigned, visually stunning **History Page**. Completed downloads are saved as persistent cards displaying preview thumbnails, format tags (`MP3`, `MP4`, `FLAC`), quality badges (`1080p`, `4K`), exact file sizes, and timestamps. Open downloaded files directly in your Windows Explorer with a single click.
+---
+
+### 📜 Rich Media Download History & Mini Media Player
+Keep track of your digital library with a redesigned, visually stunning **History Page**. Completed downloads are saved as persistent cards displaying preview thumbnails, format tags (`MP3`, `MP4`, `FLAC`), quality badges (`1080p`, `4K`), exact file sizes, and timestamps.
+* **Mini Media Player & Playlist Support:** Play audio and video directly within the app! Enjoy full album and multi-file playlist playback with **Next (⏭️)** and **Previous (⏮️)** track switching controls.
+
+---
 
 ### 🧳 100% Portable & Dynamic Path Tracking
 Take your downloads anywhere. When deployed in portable mode or copied to a USB drive, Suylios stores all configuration files (`config.json`), history logs (`history.json`), and downloaded files (`/Downloads`) directly inside the application folder. If you move or rename the project folder, the smart path engine dynamically resolves the new location automatically.
-
-### 🌍 Zero-FOUC Community Localization
-Enjoy instantaneous language switching between **English** and **Turkish** with zero screen flickering or unstyled text loading (Zero-FOUC). The localization architecture is powered by external JSON dictionaries (`locales/en/en.json`, `locales/tr/tr.json`), allowing the open-source community to effortlessly contribute new languages by simply dropping a new JSON file into the folder.
 
 ---
 
 ## 📸 Interface Preview
 
+<div align="center">
+
 ### 1. Main Command Center
 ![Main Page](src/ui/assets/screenshots/mainpage.png)
-> Real-time progress bars, download speed metrics, ETA calculations, and active queue monitoring.
+*Real-time progress bars, download speed metrics, ETA calculations, and active queue monitoring.*
+
+<br>
 
 ### 2. Advanced Settings & VIP Cookies
 ![Settings Page](src/ui/assets/screenshots/settings.png)
-> Customize subfolder organization, speed limits, concurrent thread pools, theme palettes, and VIP authentication credentials.
+*Customize subfolder organization, speed limits, concurrent thread pools, theme palettes, and VIP authentication credentials.*
+
+<br>
 
 ### 3. Detailed Media Cards
 ![Media Card](src/ui/assets/screenshots/card.png)
-> Rich thumbnail previews, dynamic status badges, and instant folder navigation buttons.
+*Rich thumbnail previews, dynamic status badges, and instant folder navigation buttons.*
+
+</div>
 
 ---
 
@@ -89,12 +136,16 @@ Enjoy instantaneous language switching between **English** and **Turkish** with 
 ## 🔒 Security & Privacy Guarantee
 
 Suylios Downloader operates with complete local isolation. All network requests are negotiated directly between your computer and the target media servers. 
-- **No Telemetry:** No user analytics, IP addresses, or download logs are ever transmitted to third-party or developer cloud servers.
-- **Self-Contained Engine:** Embedded binaries (`bin/ffmpeg.exe`) are executed within a restricted local sandbox to ensure optimal OS integrity and stability.
+* **Zero Telemetry:** No user analytics, IP addresses, or download logs are ever transmitted to third-party or developer cloud servers.
+* **Self-Contained Engine:** Embedded binaries (`bin/ffmpeg.exe`) are executed within a restricted local sandbox to ensure optimal OS integrity and stability.
 
 ---
 
+<div align="center">
+
 ## 👨‍💻 Author & License
 
-Developed with ❤️ by **Sayrias**.  
-Licensed under the [MIT License](LICENSE). Feel free to fork, customize, and contribute!
+Developed with ❤️ by **Sayrias**  
+Licensed under the [MIT License](LICENSE) • Feel free to fork, customize, and contribute!
+
+</div>
