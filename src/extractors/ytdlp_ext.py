@@ -340,6 +340,14 @@ class YtdlpExtractor(BaseExtractor):
         if speed_limit > 0:
             opts["ratelimit"] = speed_limit
 
+        opts["nocheckcertificate"] = True
+
+        if config.is_portable():
+            from src.config import _get_app_root
+            ytdlp_cache = _get_app_root() / "data" / "ytdlp_cache"
+            ytdlp_cache.mkdir(parents=True, exist_ok=True)
+            opts["cachedir"] = str(ytdlp_cache)
+
         # Cookies file support from site settings
         task_url = getattr(self, "_task_url", "").lower()
         sites = config.get("site_settings", {})

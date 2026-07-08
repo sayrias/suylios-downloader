@@ -51,6 +51,12 @@ class GalleryDLExtractor(BaseExtractor):
 
         # Rate limit engellerini ve Reddit 403/429 hatalarını önle (Tarayıcı taklidi)
         gdl_config.clear()
+        from src.config import config
+        if config.is_portable():
+            from src.config import _get_app_root
+            gdl_cache = _get_app_root() / "data" / "gdl_cache"
+            gdl_cache.mkdir(parents=True, exist_ok=True)
+            gdl_config.set(("cache",), "file", str(gdl_cache / "cache.sqlite3"))
         gdl_config.set(("extractor",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         gdl_config.set(("downloader",), "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         gdl_config.set(("extractor", "reddit"), "comments", 0)
@@ -59,8 +65,11 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.set(("extractor",), "sleep", 0.3)
         gdl_config.set(("extractor",), "retries", 3)
         gdl_config.set(("extractor",), "timeout", 15)
+        gdl_config.set(("extractor",), "verify", False)
         gdl_config.set(("downloader",), "retries", 3)
         gdl_config.set(("downloader",), "timeout", 15)
+        gdl_config.set(("downloader",), "verify", False)
+        gdl_config.set(("downloader", "http"), "verify", False)
         # Gofile: rate-limit bekleme süresini sıfırla (varsayılan 1dk x4=4dk beklemeyi engeller)
         if "gofile.io" in url:
             gdl_config.set(("extractor", "gofile"), "retries", 0)
@@ -155,6 +164,12 @@ class GalleryDLExtractor(BaseExtractor):
         dest.mkdir(parents=True, exist_ok=True)
 
         gdl_config.clear()
+        from src.config import config
+        if config.is_portable():
+            from src.config import _get_app_root
+            gdl_cache = _get_app_root() / "data" / "gdl_cache"
+            gdl_cache.mkdir(parents=True, exist_ok=True)
+            gdl_config.set(("cache",), "file", str(gdl_cache / "cache.sqlite3"))
         gdl_config.set(
             ("extractor",), "base-directory", str(dest),
         )
@@ -176,8 +191,11 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.set(("extractor",), "sleep", 0.3)
         gdl_config.set(("extractor",), "retries", 3)
         gdl_config.set(("extractor",), "timeout", 15)
+        gdl_config.set(("extractor",), "verify", False)
         gdl_config.set(("downloader",), "retries", 3)
         gdl_config.set(("downloader",), "timeout", 15)
+        gdl_config.set(("downloader",), "verify", False)
+        gdl_config.set(("downloader", "http"), "verify", False)
         # Gofile: rate-limit bekleme süresini sıfırla (varsayılan 1dk x4=4dk beklemeyi engeller)
         if "gofile.io" in url:
             gdl_config.set(("extractor", "gofile"), "retries", 0)

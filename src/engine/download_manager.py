@@ -478,6 +478,7 @@ class DownloadManager:
             logger.info("Task %s – extracting metadata…", task.id)
             try:
                 task.status = TaskStatus.DOWNLOADING
+                tried_extractors = {extractor.__class__}
                 try:
                     info = extractor.extract_info(task.url)
                 except Exception as ext_err:
@@ -491,15 +492,16 @@ class DownloadManager:
                     fallback_classes = []
                     if "gofile.io" not in task.url.lower():
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
-                            if cls != extractor.__class__ and cls.can_handle(task.url):
+                            if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
-                        if YtdlpExtractor != extractor.__class__ and YtdlpExtractor not in fallback_classes:
+                        if YtdlpExtractor not in tried_extractors and YtdlpExtractor not in fallback_classes:
                             fallback_classes.append(YtdlpExtractor)
                     else:
                         raise ext_err
 
                     success = False
                     for fb_cls in fallback_classes:
+                        tried_extractors.add(fb_cls)
                         logger.warning("Extractor %s extract_info failed (%s), falling back to %s...", extractor.__class__.__name__, ext_err, fb_cls.__name__)
                         try:
                             fb_extractor = fb_cls()
@@ -679,15 +681,16 @@ class DownloadManager:
                     fallback_classes = []
                     if "gofile.io" not in task.url.lower():
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
-                            if cls != extractor.__class__ and cls.can_handle(task.url):
+                            if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
-                        if YtdlpExtractor != extractor.__class__ and YtdlpExtractor not in fallback_classes:
+                        if YtdlpExtractor not in tried_extractors and YtdlpExtractor not in fallback_classes:
                             fallback_classes.append(YtdlpExtractor)
                     else:
                         raise dl_err
 
                     success = False
                     for fb_cls in fallback_classes:
+                        tried_extractors.add(fb_cls)
                         logger.warning("Extractor %s download failed (%s), falling back to %s...", extractor.__class__.__name__, dl_err, fb_cls.__name__)
                         try:
                             fb_extractor = fb_cls()

@@ -77,19 +77,40 @@ def _get_app_root() -> Path:
 
 
 def _is_portable() -> bool:
-    """Detect portable mode by looking for ./bin/ or ./src/ next to the executable / project root."""
+    """Detect if running as portable package vs installed setup/onefile."""
     root = _get_app_root()
-    return getattr(sys, "frozen", False) or (root / "bin").is_dir() or (root / "src").is_dir() or (root / "config.json").exists()
+    # If setup flag exists or in Program Files, it's definitely NOT portable
+    if (root / "installed_by_setup.flag").exists() or "program files" in str(root).lower():
+        return False
+    # If onefile executable (where sys._MEIPASS is different from exe directory), NOT portable (uses appdata)
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        try:
+            if Path(sys._MEIPASS).resolve() != root.resolve():
+                return False
+        except Exception:
+            pass
+    # If portable flag exists, or portable data folder exists next to exe, or during dev
+    if (root / "portable.flag").exists() or (root / "data").is_dir() or not getattr(sys, "frozen", False):
+        return True
+    return False
 
 
 def _default_download_dir() -> str:
     """Return the default download directory based on the deployment mode."""
     if _is_portable():
-        return str(_get_app_root() / "Downloads")
-    return str(Path.home() / "Downloads" / "Suylios")
+        dl_dir = _get_app_root() / "Downloads"
+        dl_dir.mkdir(parents=True, exist_ok=True)
+        return str(dl_dir)
+    dl_dir = Path.home() / "Downloads" / "Suylios Downloads"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    return str(dl_dir)
 
 
 def _get_appdata_dir() -> Path:
+    if _is_portable():
+        data_dir = _get_app_root() / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
     appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
     cfg_dir = Path(appdata) / "SuyliosDownloader"
     cfg_dir.mkdir(parents=True, exist_ok=True)

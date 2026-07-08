@@ -843,8 +843,10 @@
     badge.textContent = statusInfo.text;
     badge.className = 'status-badge ' + statusInfo.class;
 
-    // Update pause/resume button icon
+    const previewBtn = card.querySelector('.btn-preview');
     const pauseBtn = card.querySelector('.btn-pause');
+    const cancelBtn = card.querySelector('.btn-cancel');
+
     if (pauseBtn) {
       if (dl.status === 'paused') {
         pauseBtn.title = 'Devam Et';
@@ -855,13 +857,20 @@
       }
     }
 
-    // Complete: show ETA as "Tamamlandı"
+    // Complete: show ETA as "Tamamlandı", show preview button, hide pause/cancel
     if (dl.status === 'complete' || dl.status === 'completed') {
       progressPercent.textContent = '100%';
       progressEta.textContent = completedText;
       progressSpeed.textContent = '';
       progressFill.style.width = '100%';
       progressGlow.style.width = '100%';
+      if (previewBtn) previewBtn.classList.remove('hidden');
+      if (pauseBtn) pauseBtn.classList.add('hidden');
+      if (cancelBtn) cancelBtn.classList.add('hidden');
+    } else {
+      if (previewBtn) previewBtn.classList.add('hidden');
+      if (pauseBtn && dl.status !== 'error' && dl.status !== 'cancelled') pauseBtn.classList.remove('hidden');
+      if (cancelBtn && dl.status !== 'error' && dl.status !== 'cancelled') cancelBtn.classList.remove('hidden');
     }
 
     if (dl.status === 'error') {
@@ -886,10 +895,15 @@
   }
 
   function bindCardActions(card, taskId) {
+    const previewBtn = card.querySelector('.btn-preview');
     const pauseBtn = card.querySelector('.btn-pause');
     const cancelBtn = card.querySelector('.btn-cancel');
     const folderBtn = card.querySelector('.btn-folder');
     const removeBtn = card.querySelector('.btn-remove');
+
+    previewBtn?.addEventListener('click', () => {
+      if (window.openPreviewPlayer) window.openPreviewPlayer(taskId);
+    });
 
     pauseBtn?.addEventListener('click', async () => {
       const dl = state.downloads.get(taskId);
@@ -1267,7 +1281,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.6');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.7');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
@@ -2436,6 +2450,51 @@
   // v1.2.0 ─ MEDIA PREVIEW PLAYER MODAL
   // ═══════════════════════════════════════════════════════
   let _currentPreviewTaskId = null;
+  let _previewPlaylist = [];
+  let _previewIndex = 0;
+
+  function loadPreviewItem(idx) {
+    if (!_previewPlaylist || !_previewPlaylist.length) return;
+    if (idx < 0) idx = _previewPlaylist.length - 1;
+    if (idx >= _previewPlaylist.length) idx = 0;
+    _previewIndex = idx;
+
+    const item = _previewPlaylist[_previewIndex];
+    if (!item) return;
+
+    const videoEl = $('#preview-video');
+    const audioEl = $('#preview-audio');
+    const imgEl = $('#preview-image');
+    const titleEl = $('#preview-title');
+    const metaEl = $('#preview-meta');
+    const counterEl = $('#preview-counter');
+    const playlistBar = $('#preview-playlist-bar');
+
+    if (videoEl) { videoEl.style.display = 'none'; videoEl.src = ''; videoEl.pause?.(); }
+    if (audioEl) { audioEl.style.display = 'none'; audioEl.src = ''; audioEl.pause?.(); }
+    if (imgEl) { imgEl.style.display = 'none'; imgEl.src = ''; }
+
+    if (titleEl) titleEl.textContent = item.title || '▶️ Önizleme';
+    if (metaEl) metaEl.textContent = item.filepath || '';
+    if (counterEl) counterEl.textContent = `${_previewIndex + 1} / ${_previewPlaylist.length}`;
+
+    if (playlistBar) {
+      playlistBar.style.display = _previewPlaylist.length > 1 ? 'flex' : 'none';
+    }
+
+    if (item.type === 'video' && videoEl) {
+      videoEl.src = item.url;
+      videoEl.style.display = 'block';
+      videoEl.play().catch(() => {});
+    } else if (item.type === 'audio' && audioEl) {
+      audioEl.src = item.url;
+      audioEl.style.display = 'block';
+      audioEl.play().catch(() => {});
+    } else if (imgEl) {
+      imgEl.src = item.url;
+      imgEl.style.display = 'block';
+    }
+  }
 
   async function openPreviewPlayer(taskId) {
     const modal = $('#preview-modal');
@@ -2445,14 +2504,18 @@
     const loadingEl = $('#preview-loading');
     const videoEl = $('#preview-video');
     const audioEl = $('#preview-audio');
+    const imgEl = $('#preview-image');
     const titleEl = $('#preview-title');
     const metaEl = $('#preview-meta');
+    const playlistBar = $('#preview-playlist-bar');
 
-    // Reset state
     if (videoEl) { videoEl.style.display = 'none'; videoEl.src = ''; videoEl.pause?.(); }
     if (audioEl) { audioEl.style.display = 'none'; audioEl.src = ''; audioEl.pause?.(); }
+    if (imgEl) { imgEl.style.display = 'none'; imgEl.src = ''; }
+    if (playlistBar) playlistBar.style.display = 'none';
     if (loadingEl) loadingEl.style.display = 'flex';
     if (titleEl) titleEl.textContent = '⏳ Yükleniyor...';
+    if (metaEl) metaEl.textContent = '';
     modal.classList.remove('hidden');
 
     const result = await callApi('get_file_for_preview', taskId);
@@ -2464,16 +2527,14 @@
       return;
     }
 
-    if (titleEl) titleEl.textContent = result.title || '▶️ Önizleme';
-
-    if (result.type === 'video' && videoEl) {
-      videoEl.src = result.url;
-      videoEl.style.display = 'block';
-      videoEl.play().catch(() => {});
-    } else if (audioEl) {
-      audioEl.src = result.url;
-      audioEl.style.display = 'block';
-      audioEl.play().catch(() => {});
+    if (result.playlist && result.playlist.length) {
+      _previewPlaylist = result.playlist;
+      _previewIndex = result.current_index || 0;
+      loadPreviewItem(_previewIndex);
+    } else {
+      _previewPlaylist = [{ title: result.title, url: result.url, type: result.type, filepath: '' }];
+      _previewIndex = 0;
+      loadPreviewItem(0);
     }
   }
 
@@ -2488,13 +2549,30 @@
       $('#preview-audio')?.pause?.();
       if ($('#preview-video')) $('#preview-video').src = '';
       if ($('#preview-audio')) $('#preview-audio').src = '';
+      if ($('#preview-image')) $('#preview-image').src = '';
+      _previewPlaylist = [];
     };
 
     btnClose?.addEventListener('click', closeModal);
     modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
+    $('#btn-preview-prev')?.addEventListener('click', () => loadPreviewItem(_previewIndex - 1));
+    $('#btn-preview-next')?.addEventListener('click', () => loadPreviewItem(_previewIndex + 1));
+
     $('#btn-preview-open-folder')?.addEventListener('click', () => {
-      if (_currentPreviewTaskId) callApi('open_file_location', _currentPreviewTaskId);
+      if (_previewPlaylist && _previewPlaylist[_previewIndex] && _previewPlaylist[_previewIndex].filepath) {
+        callApi('open_file_location', _previewPlaylist[_previewIndex].filepath);
+      } else if (_currentPreviewTaskId) {
+        callApi('open_file_location', _currentPreviewTaskId);
+      }
+    });
+
+    // Auto-play next track when audio/video ends in a playlist!
+    $('#preview-video')?.addEventListener('ended', () => {
+      if (_previewPlaylist && _previewPlaylist.length > 1) loadPreviewItem(_previewIndex + 1);
+    });
+    $('#preview-audio')?.addEventListener('ended', () => {
+      if (_previewPlaylist && _previewPlaylist.length > 1) loadPreviewItem(_previewIndex + 1);
     });
 
     // Expose globally so history cards can call it

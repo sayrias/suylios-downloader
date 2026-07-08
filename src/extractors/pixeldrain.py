@@ -19,7 +19,7 @@ from src.extractors.base_extractor import BaseExtractor, ExtractionError
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://pixeldrain.com/api"
-_CHUNK_SIZE = 8192  # 8 KB
+_CHUNK_SIZE = 524288  # 512 KB for high-throughput downloads
 _MAX_RETRIES = 4
 _RETRY_BACKOFF = 2  # seconds; doubles each attempt
 

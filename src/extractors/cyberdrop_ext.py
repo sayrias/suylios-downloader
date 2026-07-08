@@ -108,8 +108,12 @@ class CyberdropDLExtractor(BaseExtractor):
         **kwargs: Any,
     ) -> str:
         """Download items from the gallery using cyberdrop-dl."""
-        os.makedirs(output_path, exist_ok=True)
-        cdl_appdata = os.path.join(os.path.expanduser("~"), ".suylios_cdl_data")
+        from src.config import config
+        if config.is_portable():
+            from src.config import _get_app_root
+            cdl_appdata = str(_get_app_root() / "data" / "cdl_data")
+        else:
+            cdl_appdata = os.path.join(os.path.expanduser("~"), ".suylios_cdl_data")
         os.makedirs(cdl_appdata, exist_ok=True)
 
         cdl_bin = self._get_cdl_bin()

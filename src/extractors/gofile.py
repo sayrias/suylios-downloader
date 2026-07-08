@@ -31,7 +31,7 @@ from src.extractors.base_extractor import BaseExtractor, ExtractionError
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE = 8192
+_CHUNK_SIZE = 524288  # 512 KB for high-throughput downloads
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2
 

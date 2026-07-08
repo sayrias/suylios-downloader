@@ -79,7 +79,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -322,12 +322,18 @@ class Bridge:
         """Open the folder containing the downloaded file in the OS
         file explorer."""
         try:
-            task_dict = self._dm.get_task(task_id)
-            if not task_dict:
-                return {"ok": False, "error": "Task not found."}
-            filepath = task_dict.get("filename", "")
+            filepath = ""
+            if Path(task_id).exists():
+                filepath = task_id
+            else:
+                task_dict = self._dm.get_task(task_id)
+                if not task_dict:
+                    hist = config.get_history()
+                    task_dict = next((h for h in hist if h.get("id") == task_id), None)
+                if task_dict:
+                    filepath = task_dict.get("filename", "")
+            
             if not filepath or not Path(filepath).exists():
-                # Fall back to the download directory
                 filepath = config.get_download_dir()
             folder = str(Path(filepath).parent) if Path(filepath).is_file() else filepath
             if os.name == "nt":
@@ -623,7 +629,7 @@ class Bridge:
         return {"active": active, "scheduled": scheduled, "any": (active + scheduled) > 0}
 
     def get_file_for_preview(self, task_id: str) -> dict[str, Any]:
-        """Return file path info for the built-in media player preview."""
+        """Return file path info and playlist array for the built-in media player preview."""
         try:
             hist = config.get_history()
             item = next((h for h in hist if h.get("id") == task_id), None)
@@ -635,12 +641,61 @@ class Bridge:
             filepath = item.get("filename", "")
             if not filepath or not Path(filepath).exists():
                 return {"ok": False, "error": "File not found on disk."}
-            ext = Path(filepath).suffix.lower().lstrip(".")
+            
+            filepath_path = Path(filepath)
+            folder = filepath_path if filepath_path.is_dir() else filepath_path.parent
+            
             video_exts = {"mp4", "mkv", "webm", "mov", "avi"}
             audio_exts = {"mp3", "flac", "m4a", "wav", "ogg", "aac"}
-            media_type = "video" if ext in video_exts else ("audio" if ext in audio_exts else "unknown")
-            file_url = "file:///" + filepath.replace("\\", "/")
-            return {"ok": True, "url": file_url, "type": media_type, "title": item.get("title", ""), "thumbnail": item.get("thumbnail", "")}
+            image_exts = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+            all_exts = video_exts | audio_exts | image_exts
+
+            playlist = []
+            current_index = 0
+            
+            if folder.exists() and folder.is_dir():
+                try:
+                    files = sorted([f for f in folder.iterdir() if f.is_file() and f.suffix.lower().lstrip(".") in all_exts], key=lambda x: x.name.lower())
+                    for idx, f in enumerate(files):
+                        f_ext = f.suffix.lower().lstrip(".")
+                        f_type = "video" if f_ext in video_exts else ("audio" if f_ext in audio_exts else "image")
+                        playlist.append({
+                            "title": f.name,
+                            "url": "file:///" + str(f.resolve()).replace("\\", "/"),
+                            "type": f_type,
+                            "filepath": str(f.resolve())
+                        })
+                        if not filepath_path.is_dir() and f.resolve() == filepath_path.resolve():
+                            current_index = idx
+                except Exception:
+                    pass
+
+            if not playlist and not filepath_path.is_dir() and filepath_path.exists():
+                ext = filepath_path.suffix.lower().lstrip(".")
+                media_type = "video" if ext in video_exts else ("audio" if ext in audio_exts else ("image" if ext in image_exts else "unknown"))
+                playlist.append({
+                    "title": item.get("title") or filepath_path.name,
+                    "url": "file:///" + str(filepath_path.resolve()).replace("\\", "/"),
+                    "type": media_type,
+                    "filepath": str(filepath_path.resolve())
+                })
+                current_index = 0
+
+            if not playlist:
+                return {"ok": False, "error": "Klasörde oynatılabilir medya (video, ses veya görsel) bulunamadı."}
+
+            current_item = playlist[current_index] if current_index < len(playlist) else playlist[0]
+
+            return {
+                "ok": True,
+                "url": current_item["url"],
+                "type": current_item["type"],
+                "title": current_item["title"],
+                "playlist": playlist,
+                "current_index": current_index,
+                "folder_path": str(folder.resolve()),
+                "total_items": len(playlist)
+            }
         except Exception as exc:
             logger.error("get_file_for_preview failed: %s", exc)
             return {"ok": False, "error": str(exc)}
@@ -866,7 +921,14 @@ taskkill /IM "{current_exe_name}" /F >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo [2/4] Dosyalar kopyalaniyor...
-xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}\\" >nul 2>&1
+xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}" >nul 2>&1
+
+:: If portable package has suylios.exe but current executable is different (e.g. Suylios.exe or SuyliosDownloader.exe), sync them!
+if exist "{portable_folder}\\suylios.exe" (
+    if /I not "{current_exe_name}"=="suylios.exe" (
+        copy /y "{portable_folder}\\suylios.exe" "{app_dir}\\{current_exe_name}" >nul 2>&1
+    )
+)
 
 if errorlevel 1 (
     echo.
@@ -882,7 +944,15 @@ rmdir /s /q "{upd_dir}" >nul 2>&1
 echo [4/4] Uygulama baslatiliyor...
 timeout /t 1 /nobreak >nul
 
-start "" "{app_dir}\\{current_exe_name}"
+if exist "{app_dir}\\{current_exe_name}" (
+    start "" "{app_dir}\\{current_exe_name}"
+) else if exist "{app_dir}\\suylios.exe" (
+    start "" "{app_dir}\\suylios.exe"
+) else if exist "{app_dir}\\Suylios.exe" (
+    start "" "{app_dir}\\Suylios.exe"
+) else if exist "{app_dir}\\SuyliosDownloader.exe" (
+    start "" "{app_dir}\\SuyliosDownloader.exe"
+)
 
 echo.
 echo Guncelleme tamamlandi!

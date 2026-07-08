@@ -29,13 +29,15 @@ from typing import Any, Callable, Optional
 from urllib.parse import quote, urljoin, urlparse
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 
 from src.extractors.base_extractor import BaseExtractor, ExtractionError
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE = 8192
+_CHUNK_SIZE = 524288  # 512 KB for high-throughput downloads
 _MAX_RETRIES = 5
 _RETRY_BACKOFF = 3  # seconds, doubles per retry
 _CONCURRENT_PER_DOMAIN = 2
@@ -72,6 +74,7 @@ class BunkrExtractor(BaseExtractor):
 
     def __init__(self) -> None:
         self._session = requests.Session()
+        self._session.verify = False
         self._session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -496,7 +499,7 @@ class BunkrExtractor(BaseExtractor):
         """Fetch a page's HTML, using curl_cffi if Cloudflare blocks us."""
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                resp = self._session.get(url, timeout=30)
+                resp = self._session.get(url, timeout=12)
 
                 # Detect Cloudflare challenge
                 if resp.status_code == 403 or (
@@ -509,30 +512,36 @@ class BunkrExtractor(BaseExtractor):
                 resp.raise_for_status()
                 return resp.text
 
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                logger.info("Connection/Timeout error on %s with requests (%s) – trying curl_cffi immediately.", url, exc)
+                try:
+                    return self._fetch_with_curl_cffi(url)
+                except Exception as cffi_exc:
+                    if attempt < _MAX_RETRIES:
+                        wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
+                        logger.warning("Bunkr curl_cffi fallback also failed on attempt %d/%d (%s) – retrying in %ds.", attempt, _MAX_RETRIES, cffi_exc, wait)
+                        time.sleep(wait)
+                        continue
+                    raise ExtractionError(f"Bunkr page timed out (both requests and curl_cffi failed): {url}") from exc
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                if status in (403, 429):
+                    logger.info("Bunkr HTTP %d – trying curl_cffi immediately.", status)
+                    try:
+                        return self._fetch_with_curl_cffi(url)
+                    except Exception:
+                        pass
                 if status in (403, 429) and attempt < _MAX_RETRIES:
                     wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    logger.warning(
-                        "Bunkr %d on attempt %d/%d – retrying in %ds.",
-                        status, attempt, _MAX_RETRIES, wait,
-                    )
+                    logger.warning("Bunkr %d on attempt %d/%d – retrying in %ds.", status, attempt, _MAX_RETRIES, wait)
                     time.sleep(wait)
                     continue
-                raise ExtractionError(
-                    f"Bunkr page fetch failed (HTTP {status}): {url}"
-                ) from exc
-            except requests.Timeout:
+                raise ExtractionError(f"Bunkr page fetch failed (HTTP {status}): {url}") from exc
+            except requests.RequestException as exc:
                 if attempt < _MAX_RETRIES:
                     wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    logger.warning(
-                        "Bunkr timeout on attempt %d/%d – retrying in %ds.",
-                        attempt, _MAX_RETRIES, wait,
-                    )
                     time.sleep(wait)
                     continue
-                raise ExtractionError(f"Bunkr page timed out: {url}")
-            except requests.RequestException as exc:
                 raise ExtractionError(f"Bunkr network error: {exc}") from exc
 
         raise ExtractionError(f"Bunkr page fetch failed after {_MAX_RETRIES} attempts: {url}")
@@ -549,9 +558,9 @@ class BunkrExtractor(BaseExtractor):
 
         if self._cffi_session is None:
             from curl_cffi.requests import Session as CffiSession
-            self._cffi_session = CffiSession(impersonate="chrome")
+            self._cffi_session = CffiSession(impersonate="chrome", verify=False)
 
-        resp = self._cffi_session.get(url, timeout=30)
+        resp = self._cffi_session.get(url, timeout=30, verify=False)
         if resp.status_code != 200:
             raise ExtractionError(
                 f"curl_cffi request failed (HTTP {resp.status_code}): {url}"
@@ -571,28 +580,37 @@ class BunkrExtractor(BaseExtractor):
             "Origin": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}",
         }
 
+        use_cffi = False
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                resp = self._session.get(
-                    url, stream=True, timeout=120, headers=headers,
-                )
+                if use_cffi:
+                    if self._cffi_session is None:
+                        from curl_cffi.requests import Session as CffiSession
+                        self._cffi_session = CffiSession(impersonate="chrome", verify=False)
+                    resp = self._cffi_session.get(url, stream=True, timeout=120, headers=headers, verify=False)
+                else:
+                    resp = self._session.get(url, stream=True, timeout=120, headers=headers)
 
                 if resp.status_code in (403, 429):
+                    if not use_cffi:
+                        use_cffi = True
+                        continue
                     wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    logger.warning(
-                        "Bunkr download %d (attempt %d/%d) – retrying in %ds.",
-                        resp.status_code, attempt, _MAX_RETRIES, wait,
-                    )
+                    logger.warning("Bunkr download %d (attempt %d/%d) – retrying in %ds.", resp.status_code, attempt, _MAX_RETRIES, wait)
                     time.sleep(wait)
                     continue
 
-                resp.raise_for_status()
+                if resp.status_code != 200 and resp.status_code != 206:
+                    resp.raise_for_status()
+
                 total = int(resp.headers.get("content-length", 0))
                 downloaded = 0
                 start_ts = time.monotonic()
 
                 with open(dest, "wb") as fp:
                     for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
+                        if not chunk:
+                            continue
                         fp.write(chunk)
                         downloaded += len(chunk)
 
@@ -610,11 +628,13 @@ class BunkrExtractor(BaseExtractor):
                             })
                 return  # success
 
-            except (requests.RequestException, IOError) as exc:
+            except (requests.RequestException, IOError, Exception) as exc:
+                if not use_cffi:
+                    logger.info("Switching to curl_cffi for download due to: %s", exc)
+                    use_cffi = True
+                    continue
                 if attempt == _MAX_RETRIES:
-                    raise ExtractionError(
-                        f"Bunkr download failed after {_MAX_RETRIES} attempts: {exc}"
-                    ) from exc
+                    raise ExtractionError(f"Bunkr download failed after {_MAX_RETRIES} attempts: {exc}") from exc
                 wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
                 logger.warning(
                     "Bunkr download retry %d/%d (waiting %ds): %s",

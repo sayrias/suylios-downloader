@@ -34,7 +34,7 @@ APP_NAME = "Suylios Downloader"
 try:
     from src.main import APP_VERSION
 except Exception:
-    APP_VERSION = "1.3.4"
+    APP_VERSION = "1.3.7"
 APP_PUBLISHER = "Suylios"
 APP_URL = "https://github.com/sayrias/suylios-downloader"
 APP_EXE = "suylios.exe"
@@ -122,6 +122,7 @@ Source: "{staging_dir}\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdi
 [INI]
 Filename: "{{app}}\install_lang.ini"; Section: "Setup"; Key: "Language"; String: "tr"; Languages: turkish
 Filename: "{{app}}\install_lang.ini"; Section: "Setup"; Key: "Language"; String: "en"; Languages: english
+Filename: "{{app}}\installed_by_setup.flag"; Section: "Setup"; Key: "Installed"; String: "true"
 
 [Icons]
 Name: "{{autoprograms}}\{app_name}"; Filename: "{{app}}\{app_exe}"; Tasks: startmenuicon
@@ -205,6 +206,7 @@ def build_portable():
 
     (portable_dir / "Downloads").mkdir(exist_ok=True)
     (portable_dir / "data").mkdir(exist_ok=True)
+    (portable_dir / "portable.flag").write_text("Suylios Portable Mode", encoding="utf-8")
 
     internal_dir = portable_dir / "_internal"
     if internal_dir.exists():

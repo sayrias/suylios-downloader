@@ -2,7 +2,7 @@
 
 **Next-Generation Cyber-Aesthetic Hybrid Media & Archive Downloader.**
 
-[![Version](https://img.shields.io/badge/version-1.3.6-00f0ff?style=for-the-badge&logo=appveyor)](https://github.com/sayrias/suylios-downloader)
+[![Version](https://img.shields.io/badge/version-1.3.7-00f0ff?style=for-the-badge&logo=appveyor)](https://github.com/sayrias/suylios-downloader)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a855f7?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-00e87a?style=for-the-badge&logo=windows)](https://github.com/sayrias/suylios-downloader)
 
