@@ -2160,7 +2160,7 @@ body[data-theme="basit-beyaz"] .site-icon-svg {
 .modal-body { display: flex; flex-direction: column; gap: 16px; }
 
 .modal-setting-item {
-  display: flex !important;
+  display: flex;
   flex-direction: column !important;
   align-items: stretch !important;
   gap: 10px !important;
@@ -2168,6 +2168,11 @@ body[data-theme="basit-beyaz"] .site-icon-svg {
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+}
+.modal-setting-item.hidden,
+#modal-token-row.hidden,
+#modal-account-id-row.hidden {
+  display: none !important;
 }
 .modal-setting-item .setting-info {
   width: 100% !important;
@@ -2498,13 +2503,48 @@ body[data-theme="basit-beyaz"] #schedule-url:focus {
 
 /* Custom site modal row hover and selection styling */
 .add-site-row:hover {
-  background: rgba(168, 85, 247, 0.12) !important;
+  background: rgba(168, 85, 247, 0.16) !important;
+  border-color: rgba(168, 85, 247, 0.3) !important;
+  transform: translateX(2px);
 }
 body[data-theme="basit-beyaz"] .add-site-row:hover {
-  background: rgba(168, 85, 247, 0.08) !important;
+  background: rgba(168, 85, 247, 0.1) !important;
+  border-color: rgba(168, 85, 247, 0.3) !important;
 }
 .btn-delete-custom-site:hover {
   background: rgba(255, 90, 90, 0.2) !important;
   transform: scale(1.05);
 }
+
+/* ─── PROMINENT DRAGGABLE SCROLLBAR FOR ADD-SITE-LIST ─── */
+#add-site-list::-webkit-scrollbar {
+  width: 14px !important;
+}
+#add-site-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25) !important;
+  border-radius: 10px !important;
+  margin: 4px 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+#add-site-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--accent-purple), var(--accent-cyan)) !important;
+  border-radius: 10px !important;
+  border: 3px solid var(--bg-secondary) !important;
+  min-height: 45px !important;
+}
+#add-site-list::-webkit-scrollbar-thumb:hover,
+#add-site-list::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #c084fc, #38bdf8) !important;
+  cursor: grab !important;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.7) !important;
+}
+body[data-theme="basit-beyaz"] #add-site-list::-webkit-scrollbar-track {
+  background: #e2e8f0 !important;
+  border: 1px solid #cbd5e1 !important;
+}
+body[data-theme="basit-beyaz"] #add-site-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #7c3aed, #0284c7) !important;
+  border: 3px solid #f8fafc !important;
+}
+
 

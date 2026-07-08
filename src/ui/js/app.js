@@ -1654,16 +1654,40 @@
         
         const tokenRow = document.getElementById('modal-token-row');
         const accountIdRow = document.getElementById('modal-account-id-row');
-        if (currentSiteKey === 'gofile') {
-          if (tokenRow) tokenRow.style.display = 'flex';
-          if (accountIdRow) accountIdRow.style.display = 'flex';
-          const tokenInput = document.getElementById('modal-site-token');
-          const accountIdInput = document.getElementById('modal-site-account-id');
-          if (tokenInput) tokenInput.value = siteCfg.token || 'xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y';
-          if (accountIdInput) accountIdInput.value = siteCfg.account_id || '9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506';
+        const tokenInput = document.getElementById('modal-site-token');
+        const accountIdInput = document.getElementById('modal-site-account-id');
+        const isGofile = (currentSiteKey === 'gofile' || currentSiteKey?.toLowerCase() === 'gofile');
+
+        if (isGofile) {
+          if (tokenRow) {
+            tokenRow.classList.remove('hidden');
+            tokenRow.style.removeProperty('display');
+          }
+          if (accountIdRow) {
+            accountIdRow.classList.remove('hidden');
+            accountIdRow.style.removeProperty('display');
+          }
+          if (tokenInput) {
+            const rawTok = siteCfg.token || '';
+            tokenInput.value = (rawTok === 'xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y') ? '' : rawTok;
+            tokenInput.placeholder = 'Örn: xSpfjPM... (boş bırakırsanız varsayılan kullanılır)';
+          }
+          if (accountIdInput) {
+            const rawAcc = siteCfg.account_id || '';
+            accountIdInput.value = (rawAcc === '9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506') ? '' : rawAcc;
+            accountIdInput.placeholder = 'Örn: 9cd8af... (veya boş bırakın)';
+          }
         } else {
-          if (tokenRow) tokenRow.style.display = 'none';
-          if (accountIdRow) accountIdRow.style.display = 'none';
+          if (tokenRow) {
+            tokenRow.classList.add('hidden');
+            tokenRow.style.setProperty('display', 'none', 'important');
+          }
+          if (accountIdRow) {
+            accountIdRow.classList.add('hidden');
+            accountIdRow.style.setProperty('display', 'none', 'important');
+          }
+          if (tokenInput) tokenInput.value = '';
+          if (accountIdInput) accountIdInput.value = '';
         }
         
         modal.classList.remove('hidden');
@@ -1706,9 +1730,10 @@
           cookies: document.getElementById('modal-site-cookies').value.trim(),
           quality: document.getElementById('modal-site-quality').value
         };
-        if (currentSiteKey === 'gofile') {
-          siteObj.token = document.getElementById('modal-site-token')?.value.trim() || 'xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y';
-          siteObj.account_id = document.getElementById('modal-site-account-id')?.value.trim() || '9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506';
+        const isGofileSave = (currentSiteKey === 'gofile' || currentSiteKey?.toLowerCase() === 'gofile');
+        if (isGofileSave) {
+          siteObj.token = document.getElementById('modal-site-token')?.value.trim() || '';
+          siteObj.account_id = document.getElementById('modal-site-account-id')?.value.trim() || '';
         }
         state.settings.site_settings[currentSiteKey] = siteObj;
 
@@ -1849,7 +1874,7 @@
       const filtered = availableSites.filter(s => {
         if (!q) return true;
         return s.name.toLowerCase().includes(q) || s.domain.toLowerCase().includes(q) || (s.features && s.features.toLowerCase().includes(q));
-      }).slice(0, 150); // limit for fast DOM render
+      }).slice(0, 800); // render up to 800 sites for fast mouse dragging and rich scrollbar
 
       if (filtered.length === 0) {
         listContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">Aramanızla eşleşen yeni site bulunamadı.</div>';
