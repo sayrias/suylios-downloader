@@ -542,13 +542,22 @@ class Bridge:
     def get_supported_sites(self) -> list[dict[str, Any]]:
         """Return full list of supported sites from SUPPORTED_SITES.json."""
         try:
-            root_dir = Path(_resolve_ui_path()).parent.parent.parent
-            json_path = root_dir / "SUPPORTED_SITES.json"
-            if not json_path.exists():
-                json_path = Path(__file__).resolve().parent.parent / "SUPPORTED_SITES.json"
-            if json_path.exists():
-                with open(json_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+            candidates = [
+                Path(_resolve_ui_path()).parent / "SUPPORTED_SITES.json",
+                Path(_resolve_ui_path()).parent.parent / "SUPPORTED_SITES.json",
+                Path(_resolve_ui_path()).parent.parent.parent / "SUPPORTED_SITES.json",
+                Path(__file__).resolve().parent.parent / "SUPPORTED_SITES.json",
+                Path(sys.executable).parent / "SUPPORTED_SITES.json",
+                Path(sys.executable).parent / "_internal" / "SUPPORTED_SITES.json",
+            ]
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                candidates.insert(0, Path(sys._MEIPASS) / "SUPPORTED_SITES.json")
+                candidates.insert(0, Path(sys._MEIPASS).parent / "SUPPORTED_SITES.json")
+
+            for json_path in candidates:
+                if json_path.exists():
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
         except Exception as exc:
             logger.error("Failed to load SUPPORTED_SITES.json: %s", exc)
         return []
@@ -988,6 +997,17 @@ del "%~f0" >nul 2>&1
     def shutdown(self) -> None:
         """Called on window close to release resources."""
         try:
+            if hasattr(self, "_tray_icon") and self._tray_icon:
+                try:
+                    self._tray_icon.visible = False
+                    self._tray_icon.stop()
+                except Exception:
+                    pass
+            if hasattr(self, "_single_instance_socket") and self._single_instance_socket:
+                try:
+                    self._single_instance_socket.close()
+                except Exception:
+                    pass
             self._dm.shutdown()
             config.save()
         except Exception as exc:
@@ -1086,6 +1106,8 @@ def _ensure_single_instance(bridge_holder: Optional[Any] = None) -> None:
         try:
             server.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
             server.listen(5)
+            if bridge_holder is not None:
+                bridge_holder._single_instance_socket = server
         except Exception as exc:
             logger.warning("Single instance bind error: %s", exc)
             return
@@ -1214,6 +1236,11 @@ def main() -> None:
     window.events.closing += _on_closing  # type: ignore[attr-defined]
 
     webview.start(debug=("--debug" in sys.argv))
+    try:
+        bridge.shutdown()
+    except Exception:
+        pass
+    os._exit(0)
 
 
 if __name__ == "__main__":

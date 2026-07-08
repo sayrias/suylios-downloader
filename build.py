@@ -145,6 +145,14 @@ def build_onedir() -> Path:
     ensure_pyinstaller()
     build_out = BUILD_DIR / "SuyliosDownloader"
     if build_out.exists() and (build_out / "SuyliosDownloader.exe").exists():
+        json_sites = PROJECT_ROOT / "SUPPORTED_SITES.json"
+        if json_sites.exists():
+            try:
+                shutil.copy2(json_sites, build_out / "SUPPORTED_SITES.json")
+                if (build_out / "_internal").exists():
+                    shutil.copy2(json_sites, build_out / "_internal" / "SUPPORTED_SITES.json")
+            except Exception:
+                pass
         return build_out
 
     print("[*] PyInstaller ile temel klasör derlemesi yapılıyor (yaklaşık 15 saniye)...")
@@ -165,6 +173,9 @@ def build_onedir() -> Path:
         f"--distpath={BUILD_DIR}",
         f"--workpath={BUILD_DIR / 'temp'}",
     ]
+    json_sites_path = PROJECT_ROOT / "SUPPORTED_SITES.json"
+    if json_sites_path.exists():
+        cmd.append(f"--add-data={json_sites_path}{sep}.")
     if icon_path.exists():
         cmd.append(f"--icon={icon_path}")
     cmd.append(str(main_script))
@@ -173,6 +184,15 @@ def build_onedir() -> Path:
     if res.returncode != 0:
         print("[HATA] Derleme başarısız oldu!")
         sys.exit(1)
+
+    if json_sites_path.exists():
+        try:
+            shutil.copy2(json_sites_path, build_out / "SUPPORTED_SITES.json")
+            if (build_out / "_internal").exists():
+                shutil.copy2(json_sites_path, build_out / "_internal" / "SUPPORTED_SITES.json")
+        except Exception as exc:
+            print(f"[UYARI] SUPPORTED_SITES.json kopyalanamadı: {exc}")
+
     return build_out
 
 
@@ -344,6 +364,9 @@ def build_onefile():
         f"--workpath={BUILD_DIR / 'temp_onefile'}",
         f"--specpath={BUILD_DIR}",
     ]
+    json_sites_path = PROJECT_ROOT / "SUPPORTED_SITES.json"
+    if json_sites_path.exists():
+        cmd.append(f"--add-data={json_sites_path}{sep}.")
     if ffmpeg_path.exists():
         cmd.append(f"--add-binary={ffmpeg_path}{sep}bin")
     if icon_path.exists():
