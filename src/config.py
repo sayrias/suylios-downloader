@@ -35,11 +35,19 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_shutdown": False,
     "embed_metadata": True,
     "download_subtitles": False,
+    "auto_compress": False,
+    "compress_format": "zip",
     "theme": "basit-beyaz",
     "site_settings": {
         "youtube": {"folder": "YouTube", "quality": "best", "cookies": ""},
         "bunkr": {"folder": "Bunkr", "quality": "best", "cookies": ""},
-        "gofile": {"folder": "Gofile", "quality": "best", "cookies": ""},
+        "gofile": {
+            "folder": "Gofile",
+            "quality": "best",
+            "cookies": "",
+            "token": "xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y",
+            "account_id": "9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506",
+        },
         "pixeldrain": {"folder": "Pixeldrain", "quality": "best", "cookies": ""},
         "tiktok": {"folder": "TikTok", "quality": "best", "cookies": ""},
         "twitter": {"folder": "Twitter", "quality": "best", "cookies": ""},
@@ -121,6 +129,15 @@ class Config:
                 # Merge: stored values override defaults but unknown keys
                 # in defaults are preserved.
                 defaults.update(stored)
+                # Deep merge site_settings
+                if "site_settings" in defaults and isinstance(defaults["site_settings"], dict):
+                    for k, v in _DEFAULT_SETTINGS.get("site_settings", {}).items():
+                        if k not in defaults["site_settings"] or not isinstance(defaults["site_settings"][k], dict):
+                            defaults["site_settings"][k] = dict(v) if isinstance(v, dict) else v
+                        elif isinstance(v, dict):
+                            for sub_k, sub_v in v.items():
+                                if sub_k not in defaults["site_settings"][k]:
+                                    defaults["site_settings"][k][sub_k] = sub_v
                 logger.info("Config loaded from %s", self._path)
             else:
                 logger.info("No config file found – using defaults.")

@@ -27,14 +27,20 @@ if _project_root not in sys.path:
 try:
     import webview
 except ImportError:
-    _venv_py = Path(_project_root) / "venv" / "Scripts" / "python.exe"
-    if _venv_py.is_file() and os.path.normcase(sys.executable) != os.path.normcase(str(_venv_py)):
+    _venv_win = Path(_project_root) / "venv" / "Scripts" / "python.exe"
+    _venv_unix = Path(_project_root) / "venv" / "bin" / "python"
+    _venv_py = _venv_win if _venv_win.is_file() else (_venv_unix if _venv_unix.is_file() else None)
+    if _venv_py and os.path.normcase(sys.executable) != os.path.normcase(str(_venv_py)):
         print("🔄 Sanal ortam (venv) algılandı, venv ile yeniden başlatılıyor...")
         _main_script = str(Path(__file__).resolve())
         sys.exit(subprocess.call([str(_venv_py), _main_script, *sys.argv[1:]]))
     else:
         print("📦 'pywebview' eksik! Otomatik yükleniyor...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(Path(_project_root) / "requirements.txt")], check=True)
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(Path(_project_root) / "requirements.txt")], check=True)
+        except subprocess.CalledProcessError:
+            print("⚠️ PEP 668 koruması algılandı, --break-system-packages ile yükleniyor...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", str(Path(_project_root) / "requirements.txt")], check=True)
         import webview
 
 from src.config import config
@@ -73,7 +79,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -151,6 +157,7 @@ class Bridge:
         start_time: str = "", end_time: str = "",
         embed_metadata: bool = True, download_subtitles: bool = False,
         keep_original: bool = False,
+        compress_archive: bool = False, compress_format: str = "zip",
     ) -> dict[str, Any]:
         """Enqueue a new download and return its task snapshot."""
         try:
@@ -160,6 +167,8 @@ class Bridge:
                 embed_metadata=embed_metadata,
                 download_subtitles=download_subtitles,
                 keep_original=keep_original,
+                compress_archive=compress_archive,
+                compress_format=compress_format,
             )
             return {"ok": True, "task": task.to_dict()}
         except Exception as exc:
@@ -563,6 +572,7 @@ class Bridge:
     def add_batch_downloads(
         self, urls_text: str, format_type: str = "auto", quality: str = "best",
         embed_metadata: bool = True, download_subtitles: bool = False,
+        compress_archive: bool = False, compress_format: str = "zip",
     ) -> dict[str, Any]:
         """Parse a newline-separated list of URLs and enqueue all."""
         try:
@@ -572,6 +582,7 @@ class Bridge:
             tasks = self._dm.add_batch_tasks(
                 urls=urls, format_type=format_type, quality=quality,
                 embed_metadata=embed_metadata, download_subtitles=download_subtitles,
+                compress_archive=compress_archive, compress_format=compress_format,
             )
             return {"ok": True, "count": len(tasks), "tasks": [t.to_dict() for t in tasks]}
         except Exception as exc:

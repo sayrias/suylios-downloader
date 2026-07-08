@@ -61,6 +61,18 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.set(("extractor",), "timeout", 15)
         gdl_config.set(("downloader",), "retries", 3)
         gdl_config.set(("downloader",), "timeout", 15)
+        # Gofile: rate-limit bekleme süresini sıfırla (varsayılan 1dk x4=4dk beklemeyi engeller)
+        if "gofile.io" in url:
+            gdl_config.set(("extractor", "gofile"), "retries", 0)
+            gdl_config.set(("extractor", "gofile"), "timeout", 5)
+            gdl_config.set(("extractor",), "retries", 0)
+            gdl_config.set(("extractor",), "timeout", 5)
+
+        from src.config import config
+        proxy_val = getattr(self, "_app_proxy", "") or config.get("proxy", "")
+        if proxy_val:
+            gdl_config.set(("extractor",), "proxy", proxy_val)
+            gdl_config.set(("downloader",), "proxy", proxy_val)
 
         extractor = find_extractor(url)
         if extractor is None:
@@ -166,6 +178,18 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.set(("extractor",), "timeout", 15)
         gdl_config.set(("downloader",), "retries", 3)
         gdl_config.set(("downloader",), "timeout", 15)
+        # Gofile: rate-limit bekleme süresini sıfırla (varsayılan 1dk x4=4dk beklemeyi engeller)
+        if "gofile.io" in url:
+            gdl_config.set(("extractor", "gofile"), "retries", 0)
+            gdl_config.set(("extractor", "gofile"), "timeout", 5)
+            gdl_config.set(("extractor",), "retries", 0)
+            gdl_config.set(("extractor",), "timeout", 5)
+
+        from src.config import config
+        proxy_val = getattr(self, "_app_proxy", "") or config.get("proxy", "")
+        if proxy_val:
+            gdl_config.set(("extractor",), "proxy", proxy_val)
+            gdl_config.set(("downloader",), "proxy", proxy_val)
 
         downloaded_count = 0
         last_file = ""

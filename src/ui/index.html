@@ -146,6 +146,21 @@
               <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></svg>
               <span>Zamanla</span>
             </button>
+            <label id="home-archive-pill" class="cyber-btn" style="padding: 0 12px; height: 32px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="home-compress-archive" style="display:none;">
+              <span id="home-archive-icon" style="font-size:14px; transition:transform 0.2s;">📦</span>
+              <span id="home-archive-toggle-label" style="font-size:12px; font-weight:500;">Arşiv Oluştur</span>
+            </label>
+            <div id="home-compress-format-container" class="select-wrapper" style="display:none;">
+              <select id="home-compress-format">
+                <option value="zip">ZIP (.zip)</option>
+                <option value="rar">WinRAR (.rar)</option>
+                <option value="7z">7-Zip (.7z)</option>
+                <option value="tar">TAR (.tar)</option>
+                <option value="gztar">TAR.GZ (.tar.gz)</option>
+                <option value="bztar">TAR.BZ2 (.tar.bz2)</option>
+              </select>
+            </div>
           </div>
           <!-- Trimming Row (expandable) -->
           <div id="trim-row" class="trim-row hidden" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
@@ -338,6 +353,46 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
+                  <span class="setting-label">Otomatik Arşivleme (Sıkıştırma)</span>
+                  <span class="setting-desc">İndirilen tüm dosya veya albüm klasörlerini otomatik olarak seçilen formatta sıkıştır ve arşivle</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-auto-compress">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item" id="setting-delete-archive-row" style="display: none;">
+                <div class="setting-info">
+                  <span class="setting-label">Arşivledikten Sonra Orijinal Dosyaları Sil</span>
+                  <span class="setting-desc">Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-delete-after-archive">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <span class="setting-label">Arşiv Formatı</span>
+                  <span class="setting-desc">Arşivleme işleminde kullanılacak varsayılan sıkıştırma formatı</span>
+                </div>
+                <div class="setting-control">
+                  <select id="setting-compress-format" class="select-input" style="min-width: 140px; padding: 6px 10px;">
+                    <option value="zip">ZIP (.zip)</option>
+                    <option value="rar">WinRAR (.rar)</option>
+                    <option value="7z">7-Zip (.7z)</option>
+                    <option value="tar">TAR (.tar)</option>
+                    <option value="gztar">TAR.GZ (.tar.gz)</option>
+                    <option value="bztar">TAR.BZ2 (.tar.bz2)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
                   <span class="setting-label">İndirme Bitince...</span>
                   <span class="setting-desc">İndirmeler tamamlandığında uyku/kapatma ayarla</span>
                 </div>
@@ -472,8 +527,8 @@
               </div>
 
               <!-- 3. Gofile -->
-              <div class="site-card glass-panel" style="position: relative; overflow: hidden; pointer-events: auto;">
-                <div class="site-card-header" style="opacity: 0.4; filter: grayscale(1);">
+              <div class="site-card glass-panel">
+                <div class="site-card-header">
                   <div class="site-logo">
                     <img src="https://www.google.com/s2/favicons?domain=gofile.io&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/gofile.io.ico'" class="site-icon-img" alt="Gofile">
                   </div>
@@ -482,14 +537,11 @@
                     <span>downloads/Gofile</span>
                   </div>
                 </div>
-                <div class="site-tags" style="opacity: 0.4; filter: grayscale(1);">
+                <div class="site-tags">
                   <span class="site-tag tag-cyan">VIP Çerez</span>
-                  <span class="site-tag tag-green">Bulut</span>
+                  <span class="site-tag tag-green">Aktif</span>
                 </div>
-                <button class="btn-site-config glow-btn" data-site="gofile" data-name="Gofile" data-folder="Gofile" disabled style="opacity: 0.3; cursor: not-allowed;">⚙️ Ayarla</button>
-                <div class="coming-soon-overlay" style="position: absolute; inset: 0; background: rgba(15, 18, 26, 0.65); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 10; border-radius: inherit;">
-                  <span class="coming-soon-text" style="background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.25); color: #fff; padding: 8px 18px; border-radius: 24px; font-weight: 700; font-size: 0.9rem; letter-spacing: 0.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); text-transform: uppercase;">⏳ Yakında (Ongoing)</span>
-                </div>
+                <button class="btn-site-config glow-btn" data-site="gofile" data-name="Gofile" data-folder="Gofile">⚙️ Ayarla</button>
               </div>
 
               <!-- 4. Pixeldrain -->
@@ -789,7 +841,7 @@
                   <span class="setting-desc">0 = Sınırsız (Aynı anda inecek maksimum dosya)</span>
                 </div>
                 <div class="setting-control">
-                  <input type="number" id="setting-concurrent" class="text-input number-input" value="3" min="0" placeholder="0">
+                  <input type="number" id="setting-concurrent" class="text-input number-input" value="0" min="0" placeholder="0">
                   <span class="input-suffix">Dosya</span>
                 </div>
               </div>
@@ -803,6 +855,7 @@
                   <span class="input-suffix">MB/s</span>
                 </div>
               </div>
+
               <div class="setting-item">
                 <div class="setting-info">
                   <span class="setting-label">Proxy sunucusu</span>
@@ -1068,6 +1121,24 @@
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
               <span>Dosya Seç</span>
             </button>
+          </div>
+        </div>
+        <div class="setting-item modal-setting-item" id="modal-token-row" style="display: none;">
+          <div class="setting-info">
+            <span class="setting-label">API Token / Account Token(lar)</span>
+            <span class="setting-desc">Gofile API Token(ları). Birden fazla token girilirse (virgül veya alt alta) kotası dolduğunda otomatik diğerine geçilir!</span>
+          </div>
+          <div class="setting-control" style="flex: 1.2;">
+            <textarea id="modal-site-token" class="text-input" rows="2" placeholder="Örn: token1, token2, token3... (birden fazla tokenı virgül veya yeni satırla girebilirsiniz)" style="resize: vertical; font-family: monospace; font-size: 13px; width: 100%;"></textarea>
+          </div>
+        </div>
+        <div class="setting-item modal-setting-item" id="modal-account-id-row" style="display: none;">
+          <div class="setting-info">
+            <span class="setting-label">Account ID (UUID)</span>
+            <span class="setting-desc">Gofile veya platform Hesap ID kodu</span>
+          </div>
+          <div class="setting-control">
+            <input type="text" id="modal-site-account-id" class="text-input" placeholder="9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506">
           </div>
         </div>
         <div class="setting-item modal-setting-item">

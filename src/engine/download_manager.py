@@ -9,6 +9,7 @@ PyWebView Bridge thread and internal worker threads.
 import enum
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 def format_user_error(err: Any) -> str:
     """Format and translate exceptions into clean Turkish messages for the UI."""
     s = str(err)
+    if "💡 Çözüm Bilgisi:" in s:
+        return s[:600]
     if "Unsupported URL" in s or "No extractor found" in s or "No video formats found" in s:
         return "⚠️ Bu URL desteklenmiyor veya geçerli bir medya/arşiv linki değil."
     if "error-rateLimit" in s or "HTTP Error 429" in s or "Too Many Requests" in s or "rate limit" in s.lower():
@@ -44,7 +47,7 @@ def format_user_error(err: Any) -> str:
         return "⚠️ Bu içeriği indirmek için premium üyelik gereklidir."
     if "notFound" in s or "HTTP Error 404" in s or "Video unavailable" in s or "Private video" in s:
         return "⚠️ İçerik bulunamadı, gizli veya silinmiş."
-    if "gofile" in s.lower():
+    if "gofile" in s.lower() or ("api.gofile.io" in s):
         if "notPremium" in s or "error-notPremium" in s or "requires a premium account" in s:
             return "⚠️ Gofile uyarı: Bu dosya yalnızca Gofile Premium hesaplara açıktır veya günlük ücretsiz indirme limitine ulaşılmıştır. Lütfen Ayarlar -> Gofile kısmından Premium API anahtarı ekleyin veya VPN ile IP değiştirin."
         if "notFound" in s or "error-notFound" in s:
@@ -55,6 +58,13 @@ def format_user_error(err: Any) -> str:
             return "⚠️ Gofile uyarı: Bu klasörde indirilebilir herhangi bir dosya bulunamadı veya link geçersiz."
         if "could not extract websitetoken" in s.lower():
             return "⚠️ Gofile uyarı: Gofile güvenlik doğrulaması aşılamadı. Lütfen VPN kapatıp/açıp tekrar deneyin."
+        if ("timed out" in s.lower() or "timeout" in s.lower() or "ConnectTimeout" in s
+                or "WinError 10060" in s or "engellenmiş" in s.lower() or "API engellenmiş" in s):
+            return (
+                "⚠️ Gofile sunucusuna bağlanılamıyor (IP bloğu). "
+                "Gofile'ın Cloudflare sistemi IP adresinizi geçici olarak engelledi. "
+                "Çözüm: VPN açın veya birkaç saat bekleyin ve tekrar deneyin."
+            )
     if "ConnectTimeout" in s or "Connection timed out" in s or "timed out" in s.lower() or "Max retries exceeded" in s:
         return "⚠️ Sunucuya bağlanılamadı veya zaman aşımına uğradı. IP adresiniz sunucu tarafından engellenmiş olabilir (VPN deneyebilirsiniz)."
 
@@ -114,6 +124,8 @@ class DownloadTask:
     download_subtitles: bool = False
     subtitle_langs: str = "tr,en"  # comma-separated lang codes
     keep_original: bool = False
+    compress_archive: bool = False
+    compress_format: str = "zip"   # zip | tar | gztar | bztar
 
     # Internal bookkeeping (not serialised to JS).
     _cancel_event: threading.Event = field(
@@ -148,6 +160,8 @@ class DownloadTask:
             "end_time": self.end_time,
             "scheduled_at": self.scheduled_at,
             "keep_original": self.keep_original,
+            "compress_archive": self.compress_archive,
+            "compress_format": self.compress_format,
         }
 
 
@@ -172,6 +186,7 @@ def _get_extractor(url: str):
     from src.extractors.reddit_ext import RedditExtractor
     from src.extractors.gallery_ext import GalleryDLExtractor
     from src.extractors.ytdlp_ext import YtdlpExtractor
+    from src.extractors.cyberdrop_ext import CyberdropDLExtractor
 
     url_lower = url.lower()
 
@@ -185,12 +200,13 @@ def _get_extractor(url: str):
         logger.debug("YouTube URL detected, prioritizing YtdlpExtractor: %s", url)
         return YtdlpExtractor()
 
-    # Order matters: specific extractors first, yt-dlp as universal fallback.
+    # Order matters: specific site extractors first, then gallery-dl, cyberdrop-dl, and finally yt-dlp.
     for cls in (
-        PixeldrainExtractor,
         GofileExtractor,
         BunkrExtractor,
+        PixeldrainExtractor,
         GalleryDLExtractor,
+        CyberdropDLExtractor,
         YtdlpExtractor,
     ):
         try:
@@ -254,6 +270,8 @@ class DownloadManager:
         download_subtitles: bool = False,
         subtitle_langs: str = "tr,en",
         keep_original: bool = False,
+        compress_archive: bool = False,
+        compress_format: str = "zip",
     ) -> DownloadTask:
         """Create a new download task and submit it to the worker pool.
 
@@ -270,6 +288,8 @@ class DownloadManager:
             download_subtitles=download_subtitles,
             subtitle_langs=subtitle_langs,
             keep_original=keep_original,
+            compress_archive=compress_archive,
+            compress_format=compress_format,
         )
         if scheduled_at and scheduled_at > int(__import__('time').time()):
             task.status = TaskStatus.QUEUED
@@ -291,6 +311,8 @@ class DownloadManager:
         quality: str = "best",
         embed_metadata: bool = True,
         download_subtitles: bool = False,
+        compress_archive: bool = False,
+        compress_format: str = "zip",
     ) -> list[DownloadTask]:
         """Enqueue multiple URLs at once."""
         tasks = []
@@ -303,6 +325,8 @@ class DownloadManager:
                     quality=quality,
                     embed_metadata=embed_metadata,
                     download_subtitles=download_subtitles,
+                    compress_archive=compress_archive,
+                    compress_format=compress_format,
                 )
                 tasks.append(t)
         return tasks
@@ -417,6 +441,7 @@ class DownloadManager:
             extractor._task_quality = task.quality
             extractor._task_url = task.url
             extractor._site_settings = config.get("site_settings", {})
+            extractor._app_proxy = config.get("proxy", "")
             info = extractor.extract_info(task.url)
             if info:
                 t = info.get("title")
@@ -442,6 +467,7 @@ class DownloadManager:
                 extractor._task_quality = task.quality
                 extractor._task_url = task.url
                 extractor._site_settings = config.get("site_settings", {})
+                extractor._app_proxy = config.get("proxy", "")
             except Exception as exc:
                 task.status = TaskStatus.ERROR
                 task.error_message = format_user_error(exc)
@@ -455,16 +481,44 @@ class DownloadManager:
                 try:
                     info = extractor.extract_info(task.url)
                 except Exception as ext_err:
-                    if extractor.__class__.__name__ == "GalleryDLExtractor":
-                        logger.warning("GalleryDLExtractor failed for %s (%s), falling back to YtdlpExtractor...", task.url, ext_err)
-                        from src.extractors.ytdlp_ext import YtdlpExtractor
-                        extractor = YtdlpExtractor()
-                        extractor._task_quality = task.quality
-                        extractor._task_url = task.url
-                        extractor._site_settings = config.get("site_settings", {})
-                        info = extractor.extract_info(task.url)
+                    from src.extractors.gofile import GofileExtractor
+                    from src.extractors.bunkr import BunkrExtractor
+                    from src.extractors.pixeldrain import PixeldrainExtractor
+                    from src.extractors.gallery_ext import GalleryDLExtractor
+                    from src.extractors.cyberdrop_ext import CyberdropDLExtractor
+                    from src.extractors.ytdlp_ext import YtdlpExtractor
+
+                    fallback_classes = []
+                    if "gofile.io" not in task.url.lower():
+                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
+                            if cls != extractor.__class__ and cls.can_handle(task.url):
+                                fallback_classes.append(cls)
+                        if YtdlpExtractor != extractor.__class__ and YtdlpExtractor not in fallback_classes:
+                            fallback_classes.append(YtdlpExtractor)
                     else:
                         raise ext_err
+
+                    success = False
+                    for fb_cls in fallback_classes:
+                        logger.warning("Extractor %s extract_info failed (%s), falling back to %s...", extractor.__class__.__name__, ext_err, fb_cls.__name__)
+                        try:
+                            fb_extractor = fb_cls()
+                            fb_extractor._task_quality = task.quality
+                            fb_extractor._task_url = task.url
+                            fb_extractor._site_settings = config.get("site_settings", {})
+                            fb_extractor._app_proxy = config.get("proxy", "")
+                            info = fb_extractor.extract_info(task.url)
+                            extractor = fb_extractor
+                            success = True
+                            break
+                        except Exception as fb_err:
+                            ext_err = fb_err
+                            logger.warning("Fallback extractor %s extract_info also failed (%s).", fb_cls.__name__, fb_err)
+
+                    if not success:
+                        if "gofile.io" in task.url.lower():
+                            raise ext_err
+                        info = {"title": task.url.split("/")[-1] or "Download"}
                 task.title = info.get("title", task.url)
                 task.thumbnail = info.get("thumbnail") or ""
                 # Keep a copy of the playlist/archive title so we can restore it on finish
@@ -615,26 +669,52 @@ class DownloadManager:
                         keep_original=task.keep_original,
                     )
                 except Exception as dl_err:
-                    if extractor.__class__.__name__ == "GalleryDLExtractor":
-                        logger.warning("GalleryDLExtractor download failed (%s), falling back to YtdlpExtractor...", dl_err)
-                        from src.extractors.ytdlp_ext import YtdlpExtractor
-                        extractor = YtdlpExtractor()
-                        extractor._task_quality = task.quality
-                        extractor._task_url = task.url
-                        extractor._site_settings = config.get("site_settings", {})
-                        result_path = extractor.download(
-                            url=task.url,
-                            output_path=dl_dir,
-                            format_id=task.format_type,
-                            progress_hook=_progress_hook,
-                            start_time=task.start_time,
-                            end_time=task.end_time,
-                            embed_metadata=task.embed_metadata,
-                            download_subtitles=task.download_subtitles,
-                            subtitle_langs=task.subtitle_langs,
-                            keep_original=task.keep_original,
-                        )
+                    from src.extractors.gofile import GofileExtractor
+                    from src.extractors.bunkr import BunkrExtractor
+                    from src.extractors.pixeldrain import PixeldrainExtractor
+                    from src.extractors.gallery_ext import GalleryDLExtractor
+                    from src.extractors.cyberdrop_ext import CyberdropDLExtractor
+                    from src.extractors.ytdlp_ext import YtdlpExtractor
+
+                    fallback_classes = []
+                    if "gofile.io" not in task.url.lower():
+                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
+                            if cls != extractor.__class__ and cls.can_handle(task.url):
+                                fallback_classes.append(cls)
+                        if YtdlpExtractor != extractor.__class__ and YtdlpExtractor not in fallback_classes:
+                            fallback_classes.append(YtdlpExtractor)
                     else:
+                        raise dl_err
+
+                    success = False
+                    for fb_cls in fallback_classes:
+                        logger.warning("Extractor %s download failed (%s), falling back to %s...", extractor.__class__.__name__, dl_err, fb_cls.__name__)
+                        try:
+                            fb_extractor = fb_cls()
+                            fb_extractor._task_quality = task.quality
+                            fb_extractor._task_url = task.url
+                            fb_extractor._site_settings = config.get("site_settings", {})
+                            fb_extractor._app_proxy = config.get("proxy", "")
+                            result_path = fb_extractor.download(
+                                url=task.url,
+                                output_path=dl_dir,
+                                format_id=task.format_type,
+                                progress_hook=_progress_hook,
+                                start_time=task.start_time,
+                                end_time=task.end_time,
+                                embed_metadata=task.embed_metadata,
+                                download_subtitles=task.download_subtitles,
+                                subtitle_langs=task.subtitle_langs,
+                                keep_original=task.keep_original,
+                            )
+                            extractor = fb_extractor
+                            success = True
+                            break
+                        except Exception as fb_err:
+                            dl_err = fb_err
+                            logger.warning("Fallback extractor %s download also failed (%s).", fb_cls.__name__, fb_err)
+
+                    if not success:
                         raise dl_err
 
                 if task._cancel_event.is_set():
@@ -704,7 +784,8 @@ class DownloadManager:
                 is_empty = False
                 if check_target and os.path.exists(check_target):
                     if os.path.isdir(check_target):
-                        if not os.listdir(check_target):
+                        real_files = [f for f in os.listdir(check_target) if f not in ("AppData", ".suylios_cdl_data", "Cache", "Configs")]
+                        if not real_files:
                             is_empty = True
                     elif os.path.isfile(check_target):
                         if os.path.getsize(check_target) == 0:
@@ -718,6 +799,161 @@ class DownloadManager:
                 task.status = TaskStatus.COMPLETED
                 task.progress = 100.0
                 task.filename = result_path or task.filename
+
+                if task.compress_archive or config.get("auto_compress", False):
+                    # Only archive if it's a single item, or if it's the last item in a playlist
+                    should_archive = (task.item_count <= 1) or (task.item_index == task.item_count)
+                    if not should_archive:
+                        logger.info("Skipping archive for %s: item %d of %d", check_target, task.item_index, task.item_count)
+                    else:
+                        fmt = (task.compress_format or config.get("compress_format", "zip")).lower().strip(".")
+                        try:
+                            logger.info("Archiving %s using format %s...", check_target, fmt)
+                            
+                            # Eğer check_target tek dosya ama üst dizinde başka dosyalar da varsa (ve ana dl_dir değilse), klasörü arşivle
+                            archive_dir = check_target
+                            if os.path.isfile(check_target):
+                                parent = os.path.dirname(check_target)
+                                # Check if parent is NOT the main download directory
+                                if os.path.normcase(os.path.abspath(parent)) != os.path.normcase(os.path.abspath(dl_dir)):
+                                    parent_files = [f for f in os.listdir(parent) if not f.startswith(".") and f not in ("AppData", ".suylios_cdl_data", "Cache", "Configs")]
+                                    if len(parent_files) > 1:
+                                        archive_dir = parent
+
+                            archive_success = False
+                            
+                            if os.path.isdir(archive_dir):
+                                archive_base_name = os.path.basename(archive_dir.rstrip("/\\"))
+                                # Arşiv adı = klasörün dışına geçici isimle oluştur, sonra içine taşıyacağız
+                                archive_base = archive_dir.rstrip("/\\") + "_temp_archive"
+                                temp_archive_path = ""
+                                
+                                if fmt == "rar":
+                                    rar_bin = shutil.which("rar") or shutil.which("Rar") or r"C:\Program Files\WinRAR\Rar.exe"
+                                    if os.path.exists(rar_bin):
+                                        subprocess.run([rar_bin, "a", "-r", archive_base + ".rar", archive_dir], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                        if os.path.exists(archive_base + ".rar"):
+                                            temp_archive_path = archive_base + ".rar"
+                                            archive_success = True
+                                    else:
+                                        fmt = "zip"
+                                if fmt == "7z":
+                                    sz_bin = shutil.which("7z") or r"C:\Program Files\7-Zip\7z.exe"
+                                    if os.path.exists(sz_bin):
+                                        subprocess.run([sz_bin, "a", archive_base + ".7z", archive_dir], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                        if os.path.exists(archive_base + ".7z"):
+                                            temp_archive_path = archive_base + ".7z"
+                                            archive_success = True
+                                    else:
+                                        try:
+                                            import py7zr
+                                            with py7zr.SevenZipFile(archive_base + ".7z", 'w') as szf:
+                                                szf.writeall(archive_dir, os.path.basename(archive_dir))
+                                            if os.path.exists(archive_base + ".7z"):
+                                                temp_archive_path = archive_base + ".7z"
+                                                archive_success = True
+                                        except ImportError:
+                                            fmt = "zip"
+                                if fmt in ("zip", "tar", "gztar", "bztar"):
+                                    root_dir = os.path.dirname(archive_dir.rstrip("/\\"))
+                                    base_dir = os.path.basename(archive_dir.rstrip("/\\"))
+                                    shutil.make_archive(archive_base, fmt, root_dir, base_dir)
+                                    ext = ".zip" if fmt == "zip" else (".tar.gz" if fmt == "gztar" else (".tar.bz2" if fmt == "bztar" else f".{fmt}"))
+                                    if os.path.exists(archive_base + ext):
+                                        temp_archive_path = archive_base + ext
+                                        archive_success = True
+                                        
+                                # Eğer başarılı olduysa temp dosyayı klasörün içine taşı
+                                if archive_success and temp_archive_path and os.path.exists(temp_archive_path):
+                                    final_archive_path = os.path.join(archive_dir, os.path.basename(temp_archive_path).replace("_temp_archive", ""))
+                                    if os.path.exists(final_archive_path):
+                                        try: os.remove(final_archive_path)
+                                        except: pass
+                                    shutil.move(temp_archive_path, final_archive_path)
+                                    task.filename = final_archive_path
+                                    result_path = task.filename
+                                    
+                                    # Opsiyonel: Orijinal klasör içeriğini silme
+                                    delete_after = config.get("delete_after_archive", False)
+                                    if delete_after and not task.keep_original:
+                                        logger.info("Archive successful, cleaning up contents of folder: %s", archive_dir)
+                                        for item in os.listdir(archive_dir):
+                                            item_path = os.path.join(archive_dir, item)
+                                            # Kendi oluşturduğumuz zip/rar dosyasını silmeyelim
+                                            if os.path.normcase(os.path.abspath(item_path)) != os.path.normcase(os.path.abspath(final_archive_path)):
+                                                try:
+                                                    if os.path.isdir(item_path):
+                                                        shutil.rmtree(item_path)
+                                                    else:
+                                                        os.remove(item_path)
+                                                except Exception as clean_err:
+                                                    logger.error("Failed to clean up item inside folder: %s", clean_err)
+                                                    
+                                    archive_success = False # Bu bloğun altındaki genel silme işlemine girmemesi için False yapıyoruz (çünkü zaten üstte sildik)
+                            elif os.path.isfile(archive_dir):
+                                single_base = os.path.splitext(archive_dir)[0]
+                                if fmt in ("zip", "tar", "gztar", "bztar"):
+                                    root_dir = os.path.dirname(archive_dir)
+                                    base_dir = os.path.basename(archive_dir)
+                                    shutil.make_archive(single_base, fmt, root_dir, base_dir)
+                                    ext = ".zip" if fmt == "zip" else (".tar.gz" if fmt == "gztar" else (".tar.bz2" if fmt == "bztar" else f".{fmt}"))
+                                    archive_path = single_base + ext
+                                    if os.path.exists(archive_path):
+                                        archive_success = True
+                                elif fmt == "rar":
+                                    rar_bin = shutil.which("rar") or shutil.which("Rar") or r"C:\Program Files\WinRAR\Rar.exe"
+                                    archive_path = single_base + ".rar"
+                                    if os.path.exists(rar_bin):
+                                        subprocess.run([rar_bin, "a", archive_path, archive_dir], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                        if os.path.exists(archive_path):
+                                            archive_success = True
+                                    else:
+                                        import zipfile
+                                        archive_path = single_base + ".zip"
+                                        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                                            zf.write(archive_dir, os.path.basename(archive_dir))
+                                        if os.path.exists(archive_path):
+                                            archive_success = True
+                                elif fmt == "7z":
+                                    sz_bin = shutil.which("7z") or r"C:\Program Files\7-Zip\7z.exe"
+                                    archive_path = single_base + ".7z"
+                                    if os.path.exists(sz_bin):
+                                        subprocess.run([sz_bin, "a", archive_path, archive_dir], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                        if os.path.exists(archive_path):
+                                            archive_success = True
+                                    else:
+                                        try:
+                                            import py7zr
+                                            with py7zr.SevenZipFile(archive_path, 'w') as szf:
+                                                szf.write(archive_dir, os.path.basename(archive_dir))
+                                            if os.path.exists(archive_path):
+                                                archive_success = True
+                                        except ImportError:
+                                            import zipfile
+                                            archive_path = single_base + ".zip"
+                                            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                                                zf.write(archive_dir, os.path.basename(archive_dir))
+                                            if os.path.exists(archive_path):
+                                                archive_success = True
+                                
+                                if archive_success and os.path.exists(archive_path):
+                                    task.filename = archive_path
+                                    result_path = task.filename
+                                    
+                            # İndirilen orijinal klasörü/dosyayı temizle (Tekil dosyalar veya temp'i taşımayan eski mantık için)
+                            delete_after = config.get("delete_after_archive", False)
+                            if archive_success and delete_after and not task.keep_original:
+                                logger.info("Archive successful, cleaning up original: %s", archive_dir)
+                                try:
+                                    if os.path.isdir(archive_dir):
+                                        shutil.rmtree(archive_dir)
+                                    elif os.path.isfile(archive_dir):
+                                        os.remove(archive_dir)
+                                except Exception as clean_err:
+                                    logger.error("Failed to clean up original after archiving: %s", clean_err)
+                        except Exception as arc_err:
+                            logger.error("Compression archive error: %s", arc_err)
+
                 # On playlist/archive completion: restore the original title and clear item counter
                 if task.archive_title:
                     task.title = task.archive_title

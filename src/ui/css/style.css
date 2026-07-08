@@ -1022,7 +1022,7 @@ body::before {
 .settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 28px 140px;
+  padding: 24px 28px 40px;
   position: relative;
 }
 
@@ -1928,9 +1928,19 @@ body[data-theme="sunset"] {
   animation: menuDrop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   min-width: 120px;
 }
+.cyber-dropdown-menu.open-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+  animation: menuDropUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
 
 @keyframes menuDrop {
   from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes menuDropUp {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
@@ -2356,6 +2366,14 @@ body[data-theme="basit-beyaz"] #btn-schedule {
 }
 body[data-theme="basit-beyaz"] #btn-schedule:hover {
   background: #ede9fe;
+}
+body[data-theme="basit-beyaz"] #home-archive-pill {
+  color: #475569;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+body[data-theme="basit-beyaz"] #home-archive-pill:hover {
+  background: #f1f5f9;
 }
 
 /* v1.2.0 – Beyaz Tema Modal İyileştirmeleri (Toplu, Zamanlanmış İndirme, Ayarlar vb.) */

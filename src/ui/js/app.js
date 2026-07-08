@@ -411,13 +411,26 @@
     const embedMeta = $('#setting-embed-metadata')?.checked ?? true;
     const dlSubs = $('#setting-download-subtitles')?.checked ?? false;
     const keepOrig = $('#trim-keep-original')?.checked ?? false;
-    const result = await callApi('add_download', url, format, quality, startTime, endTime, embedMeta, dlSubs, keepOrig);
+    const compressArchive = $('#home-compress-archive')?.checked || false;
+    const compressFormat = $('#home-compress-format')?.value || 'zip';
+    const result = await callApi('add_download', url, format, quality, startTime, endTime, embedMeta, dlSubs, keepOrig, compressArchive, compressFormat);
 
     dom.btnDownload.disabled = false;
     dom.btnDownload.style.opacity = '';
 
     if (result && (result.task || result.task_id || result.ok)) {
       dom.urlInput.value = '';
+      // Reset home compress controls after download
+      const hca = $('#home-compress-archive');
+      if (hca) hca.checked = false;
+      const container = $('#home-compress-format-container');
+      if (container) container.style.display = 'none';
+      const pill = $('#home-archive-pill');
+      if (pill) { pill.style.borderColor = ''; pill.style.boxShadow = ''; }
+      const archLabel = $('#home-archive-toggle-label');
+      if (archLabel) { archLabel.style.color = ''; archLabel.style.background = ''; }
+      const archIcon = $('#home-archive-icon');
+      if (archIcon) archIcon.style.transform = '';
       if ($('#btn-trim-clear') && !$('#btn-trim-clear').classList.contains('hidden')) {
         $('#btn-trim-clear').click();
       }
@@ -1098,10 +1111,36 @@
     }
 
     // Auto-save on change for all settings inputs
-    $$('.settings-tab input, .settings-tab select').forEach(el => {
+    $$('.settings-tab input, .settings-tab select, #home-compress-archive, #home-compress-format').forEach(el => {
       el.addEventListener('change', () => {
         if (el.id === 'setting-language') {
           applyLanguage(el.value);
+        } else if (el.id === 'home-compress-archive') {
+          const container = $('#home-compress-format-container');
+          if (container) container.style.display = el.checked ? 'block' : 'none';
+          // Update pill visual state
+          const pill = $('#home-archive-pill');
+          const label = $('#home-archive-toggle-label');
+          const icon = $('#home-archive-icon');
+          if (pill) {
+            pill.style.borderColor = el.checked ? 'var(--accent-cyan)' : '';
+            pill.style.boxShadow = el.checked ? '0 0 12px rgba(0,240,255,0.2)' : '';
+            pill.style.color = el.checked ? 'var(--accent-cyan)' : '';
+            pill.style.background = el.checked ? 'rgba(0,240,255,0.08)' : '';
+          }
+          if (icon) icon.style.transform = el.checked ? 'scale(1.2)' : 'scale(1)';
+        } else if (el.id === 'home-compress-format') {
+          // Do nothing to settings
+        } else if (el.id === 'setting-auto-compress') {
+          const delRow = $('#setting-delete-archive-row');
+          if (delRow) delRow.style.display = el.checked ? 'flex' : 'none';
+        } else if (el.id === 'setting-compress-format') {
+          const s = $('#setting-compress-format');
+          if (s) {
+            // update custom dropdown text for settings
+            const textSpan = s.closest('.select-wrapper')?.querySelector('.cyber-dropdown-text');
+            if (textSpan) textSpan.textContent = s.options[s.selectedIndex].text;
+          }
         }
         saveCurrentSettings();
       });
@@ -1297,6 +1336,22 @@
       const el = $('#setting-download-subtitles');
       if (el) el.checked = settings.download_subtitles;
     }
+    if (settings.auto_compress !== undefined) {
+      const el = $('#setting-auto-compress');
+      if (el) {
+        el.checked = settings.auto_compress;
+        const delRow = $('#setting-delete-archive-row');
+        if (delRow) delRow.style.display = el.checked ? 'flex' : 'none';
+      }
+    }
+    if (settings.delete_after_archive !== undefined) {
+      const el = $('#setting-delete-after-archive');
+      if (el) el.checked = settings.delete_after_archive;
+    }
+    if (settings.compress_format) {
+      const el = $('#setting-compress-format');
+      if (el) el.value = settings.compress_format;
+    }
     if (settings.download_path) {
       dom.settingDownloadPath.value = settings.download_path;
     }
@@ -1356,6 +1411,9 @@
       background_mode: $('#setting-background-mode')?.checked ?? true,
       embed_metadata: $('#setting-embed-metadata')?.checked ?? true,
       download_subtitles: $('#setting-download-subtitles')?.checked ?? false,
+      auto_compress: $('#setting-auto-compress')?.checked || false,
+      delete_after_archive: $('#setting-delete-after-archive')?.checked || false,
+      compress_format: $('#setting-compress-format')?.value || 'zip',
       download_path: dom.settingDownloadPath?.value || '',
       subfolders: $('#setting-subfolders')?.checked ?? true,
       filename_template: $('#setting-filename-template')?.value || '%(title)s.%(ext)s',
@@ -1363,7 +1421,7 @@
       audio_format: $('#setting-audio-format')?.value || 'mp3',
       default_quality: $('#setting-default-quality')?.value || 'best',
       mp3_bitrate: parseInt($('#setting-mp3-bitrate')?.value) || 192,
-      concurrent_downloads: dom.settingConcurrent && dom.settingConcurrent.value !== '' ? parseInt(dom.settingConcurrent.value, 10) : 3,
+      concurrent_downloads: dom.settingConcurrent && dom.settingConcurrent.value !== '' ? parseInt(dom.settingConcurrent.value, 10) : 0,
       speed_limit: (parseFloat($('#setting-speed-limit')?.value) || 0) * 1024 * 1024,
       proxy: $('#setting-proxy')?.value || '',
       ffmpeg_path: $('#setting-ffmpeg-path')?.value || '',
@@ -1550,6 +1608,20 @@
         document.getElementById('modal-site-cookies').value = siteCfg.cookies || '';
         document.getElementById('modal-site-quality').value = siteCfg.quality || 'best';
         
+        const tokenRow = document.getElementById('modal-token-row');
+        const accountIdRow = document.getElementById('modal-account-id-row');
+        if (currentSiteKey === 'gofile') {
+          if (tokenRow) tokenRow.style.display = 'flex';
+          if (accountIdRow) accountIdRow.style.display = 'flex';
+          const tokenInput = document.getElementById('modal-site-token');
+          const accountIdInput = document.getElementById('modal-site-account-id');
+          if (tokenInput) tokenInput.value = siteCfg.token || 'xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y';
+          if (accountIdInput) accountIdInput.value = siteCfg.account_id || '9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506';
+        } else {
+          if (tokenRow) tokenRow.style.display = 'none';
+          if (accountIdRow) accountIdRow.style.display = 'none';
+        }
+        
         modal.classList.remove('hidden');
       };
     });
@@ -1585,11 +1657,16 @@
         if (!state.settings.site_settings) state.settings.site_settings = {};
         
         const folderInput = document.getElementById('modal-site-folder').value.trim();
-        state.settings.site_settings[currentSiteKey] = {
+        const siteObj = {
           folder: folderInput || 'Folder',
           cookies: document.getElementById('modal-site-cookies').value.trim(),
           quality: document.getElementById('modal-site-quality').value
         };
+        if (currentSiteKey === 'gofile') {
+          siteObj.token = document.getElementById('modal-site-token')?.value.trim() || 'xSpfjPMJNfMWKw4cKOaJVBmbzjxeGr3Y';
+          siteObj.account_id = document.getElementById('modal-site-account-id')?.value.trim() || '9cd8af62-f3ea-4d2a-88d0-25b0ae9c2506';
+        }
+        state.settings.site_settings[currentSiteKey] = siteObj;
 
         saveCurrentSettings();
         modal?.classList.add('hidden');
@@ -1706,9 +1783,17 @@
       trigger.addEventListener('click', (e) => {
         e.stopPropagation();
         const isHidden = menu.classList.contains('hidden');
-        document.querySelectorAll('.cyber-dropdown-menu').forEach(m => m.classList.add('hidden'));
+        document.querySelectorAll('.cyber-dropdown-menu').forEach(m => {
+          m.classList.add('hidden');
+          m.classList.remove('open-up');
+        });
         document.querySelectorAll('.cyber-dropdown').forEach(d => d.classList.remove('active'));
         if (isHidden) {
+          // Check if there is enough space below
+          const rect = trigger.getBoundingClientRect();
+          if (window.innerHeight - rect.bottom < 200) {
+            menu.classList.add('open-up');
+          }
           menu.classList.remove('hidden');
           custom.classList.add('active');
         }
@@ -1792,10 +1877,14 @@
 
       const format = $('#batch-format-select')?.value || 'auto';
       const quality = $('#batch-quality-select')?.value || 'best';
+      const embedMeta = $('#setting-embed-metadata')?.checked ?? true;
+      const dlSubs = $('#setting-download-subtitles')?.checked ?? false;
+      const compressArchive = $('#home-compress-archive')?.checked || $('#setting-auto-compress')?.checked || false;
+      const compressFormat = $('#home-compress-format')?.value || $('#setting-compress-format')?.value || 'zip';
 
       btnStart.disabled = true;
       btnStart.innerHTML = '⏳ <span>Ekleniyor...</span>';
-      const result = await callApi('add_batch_downloads', urlsText, format, quality);
+      const result = await callApi('add_batch_downloads', urlsText, format, quality, embedMeta, dlSubs, compressArchive, compressFormat);
       btnStart.disabled = false;
       btnStart.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span>Tümünü Sıraya Ekle</span>';
 

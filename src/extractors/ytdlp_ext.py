@@ -105,7 +105,17 @@ class YtdlpExtractor(BaseExtractor):
                 raw = ydl.extract_info(url, download=False)
                 self._cached_raw_info = raw
         except Exception as exc:
-            raise ExtractionError(f"yt-dlp extract_info failed: {exc}") from exc
+            try:
+                logger.warning("yt-dlp specific extractor failed (%s), retrying with allowed_extractors=['generic']...", exc)
+                fallback_opts = dict(ydl_opts)
+                fallback_opts["force_generic_extractor"] = True
+                fallback_opts["allowed_extractors"] = ["generic"]
+                with yt_dlp.YoutubeDL(fallback_opts) as ydl_fallback:
+                    raw = ydl_fallback.extract_info(url, download=False)
+                    self._cached_raw_info = raw
+                    self._used_generic_fallback = True
+            except Exception as fallback_exc:
+                raise ExtractionError(f"yt-dlp extract_info failed: {exc} (Generic fallback also failed: {fallback_exc})") from exc
 
         if raw is None:
             raise ExtractionError("yt-dlp returned no information for this URL.")
@@ -140,6 +150,9 @@ class YtdlpExtractor(BaseExtractor):
             ) from exc
 
         ydl_opts = self._base_opts(url)
+        if getattr(self, "_used_generic_fallback", False):
+            ydl_opts["force_generic_extractor"] = True
+            ydl_opts["allowed_extractors"] = ["generic"]
         ydl_opts["paths"] = {"home": output_path}
         ydl_opts["outtmpl"] = {"default": "%(title).150B [%(id)s].%(ext)s"}
 
@@ -283,6 +296,10 @@ class YtdlpExtractor(BaseExtractor):
             "geo_bypass": True,
             "noprogress": True,
         }
+        from src.config import config
+        proxy_val = getattr(self, "_app_proxy", "") or config.get("proxy", "")
+        if proxy_val:
+            opts["proxy"] = proxy_val
         check_url = (url or getattr(self, "_task_url", "")).lower()
         if "youtu" in check_url:
             opts["extractor_args"] = {
