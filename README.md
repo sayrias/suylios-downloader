@@ -2,7 +2,7 @@
 
 **Next-Generation Cyber-Aesthetic Hybrid Media & Archive Downloader.**
 
-[![Version](https://img.shields.io/badge/version-1.3.4-00f0ff?style=for-the-badge&logo=appveyor)](https://github.com/sayrias/suylios-downloader)
+[![Version](https://img.shields.io/badge/version-1.3.5-00f0ff?style=for-the-badge&logo=appveyor)](https://github.com/sayrias/suylios-downloader)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a855f7?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-00e87a?style=for-the-badge&logo=windows)](https://github.com/sayrias/suylios-downloader)
 
@@ -26,6 +26,12 @@ Experience a breathtaking interface crafted with glassmorphism panels, neon glow
 - 💻 **Emerald Hacker (Green):** Matrix-inspired deep black canvas with glowing terminal green highlights.
 - 🔴 **Crimson Night (Red):** Bold dark ruby styling with aggressive crimson indicators.
 - 🌅 **Sunset Gold (Yellow):** Warm, luxurious golden amber accents over dark velvet backgrounds.
+
+### 📦 Smart Auto-Archiving & Album Compression
+Automate your digital storage pipeline. When downloading multi-file cloud folders or media galleries (Gofile, Reddit, YouTube Playlists), Suylios can automatically compress and bundle completed downloads on the fly into **ZIP, WinRAR (.rar), 7-Zip (.7z), or TAR.GZ** formats.
+- **In-Folder Archive Generation:** Archives are safely created inside their respective album directories without polluting your main downloads folder.
+- **Optional Original File Cleanup:** Enable **Delete Original Files After Archiving** from settings to automatically remove uncompressed source files once the archive verification succeeds, keeping your storage drive ultra-tidy.
+- **Independent Home Controls:** Toggle quick single-task compression directly from the main control bar with the glowing `📦 Arşiv Oluştur` button without changing global defaults.
 
 ### ⚡ Smart Link Capture (Ctrl+V Automation)
 No need to manually click input boxes. When the application window is active, simply press **`Ctrl+V`** to paste any copied URL from your clipboard. Suylios instantly parses the link, detects the platform, applies your preferred quality preferences, and launches the download queue automatically.
