@@ -905,43 +905,23 @@ class Bridge:
 chcp 65001 >nul 2>&1
 title Suylios Downloader - Guncelleniyor...
 
-echo.
-echo ============================================
-echo   Suylios Downloader Guncelleniyor...
-echo ============================================
-echo.
-echo [1/4] Uygulama kapatiliyor...
-
 :: Kill the running process by PID first, then by name as fallback
 taskkill /PID {current_pid} /F >nul 2>&1
 timeout /t 2 /nobreak >nul
-
-:: Double-check: kill by exe name if still running
 taskkill /IM "{current_exe_name}" /F >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-echo [2/4] Dosyalar kopyalaniyor...
-xcopy /y /e /h /c /i "{portable_folder}\\*" "{app_dir}" >nul 2>&1
+:: Copy files non-interactively using PowerShell first, then xcopy with <nul redirection so it NEVER hangs!
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -Path '{portable_folder}\\*' -Destination '{app_dir}' -Recurse -Force -ErrorAction SilentlyContinue" >nul 2>&1
+xcopy /y /e /h /c /i /r "{portable_folder}\\*" "{app_dir}\\." <nul >nul 2>&1
 
 :: If portable package has suylios.exe but current executable is different (e.g. Suylios.exe or SuyliosDownloader.exe), sync them!
 if exist "{portable_folder}\\suylios.exe" (
     if /I not "{current_exe_name}"=="suylios.exe" (
-        copy /y "{portable_folder}\\suylios.exe" "{app_dir}\\{current_exe_name}" >nul 2>&1
+        copy /y "{portable_folder}\\suylios.exe" "{app_dir}\\{current_exe_name}" <nul >nul 2>&1
     )
 )
 
-if errorlevel 1 (
-    echo.
-    echo [HATA] Dosya kopyalama basarisiz! Yonetici olarak calistirmayi deneyin.
-    echo Guncelleme dosyalari burada: {upd_dir}
-    pause
-    exit /b 1
-)
-
-echo [3/4] Gecici dosyalar temizleniyor...
-rmdir /s /q "{upd_dir}" >nul 2>&1
-
-echo [4/4] Uygulama baslatiliyor...
 timeout /t 1 /nobreak >nul
 
 if exist "{app_dir}\\{current_exe_name}" (
@@ -954,29 +934,32 @@ if exist "{app_dir}\\{current_exe_name}" (
     start "" "{app_dir}\\SuyliosDownloader.exe"
 )
 
-echo.
-echo Guncelleme tamamlandi!
-timeout /t 2 /nobreak >nul
-
-:: Clean up this bat file
+:: Clean up update folder and vbs/bat files
+rmdir /s /q "{upd_dir}" >nul 2>&1
+del "{launcher_dir / 'update_launcher.vbs'}" >nul 2>&1
 del "%~f0" >nul 2>&1
 '''
                 with open(bat_path, "w", encoding="utf-8") as bf:
                     bf.write(bat_content)
 
-                logger.info("Update bat written to %s", bat_path)
+                vbs_path = launcher_dir / "update_launcher.vbs"
+                vbs_content = f'CreateObject("Wscript.Shell").Run chr(34) & "{bat_path}" & chr(34), 0, False\n'
+                with open(vbs_path, "w", encoding="utf-8") as vf:
+                    vf.write(vbs_content)
+
+                logger.info("Update bat written to %s and vbs to %s", bat_path, vbs_path)
                 logger.info("Portable folder: %s", portable_folder)
                 logger.info("App dir: %s", app_dir)
                 
-                # Launch the updater bat
+                # Launch the updater via hidden VBScript (0 = hidden, no console window at all)
                 if "Program Files" in str(app_dir) or not os.access(str(app_dir), os.W_OK):
                     try:
                         import ctypes
-                        ctypes.windll.shell32.ShellExecuteW(None, "runas", str(bat_path), None, str(launcher_dir), 1)
+                        ctypes.windll.shell32.ShellExecuteW(None, "runas", "wscript.exe", f'"{vbs_path}"', str(launcher_dir), 0)
                     except Exception:
-                        subprocess.Popen(["cmd", "/c", str(bat_path)], shell=False, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=str(launcher_dir))
+                        subprocess.Popen(["wscript.exe", str(vbs_path)], shell=False, creationflags=0x08000000, cwd=str(launcher_dir))
                 else:
-                    subprocess.Popen(["cmd", "/c", str(bat_path)], shell=False, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=str(launcher_dir))
+                    subprocess.Popen(["wscript.exe", str(vbs_path)], shell=False, creationflags=0x08000000, cwd=str(launcher_dir))
                 
                 time.sleep(1)
                 self.force_quit()
