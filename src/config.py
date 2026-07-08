@@ -106,6 +106,32 @@ def _history_file_path() -> Path:
     return _get_appdata_dir() / "history.json"
 
 
+def _detect_initial_language() -> str:
+    """Detect setup language from install_lang.ini or OS locale."""
+    try:
+        exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent
+        ini_path = exe_dir / "install_lang.ini"
+        if ini_path.exists():
+            content = ini_path.read_text(encoding="utf-8", errors="ignore")
+            for line in content.splitlines():
+                if line.strip().lower().startswith("language="):
+                    val = line.split("=", 1)[1].strip().lower()
+                    if val in ("en", "tr"):
+                        return val
+    except Exception:
+        pass
+
+    try:
+        import locale
+        loc = locale.getdefaultlocale()[0] or ""
+        if loc.lower().startswith("tr"):
+            return "tr"
+    except Exception:
+        pass
+
+    return "en"
+
+
 class Config:
     """Thread-safe, JSON-backed application configuration."""
 
@@ -138,10 +164,25 @@ class Config:
                             for sub_k, sub_v in v.items():
                                 if sub_k not in defaults["site_settings"][k]:
                                     defaults["site_settings"][k][sub_k] = sub_v
+                
+                # Check if setup installer ran after config.json was saved and updated language choice
+                try:
+                    exe_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent.parent
+                    ini_path = exe_dir / "install_lang.ini"
+                    if ini_path.exists() and ini_path.stat().st_mtime > self._path.stat().st_mtime + 2:
+                        setup_lang = _detect_initial_language()
+                        if setup_lang in ("en", "tr") and setup_lang != defaults.get("language"):
+                            defaults["language"] = setup_lang
+                            logger.info("Language updated from install_lang.ini: %s", setup_lang)
+                except Exception:
+                    pass
+
                 logger.info("Config loaded from %s", self._path)
             else:
-                logger.info("No config file found – using defaults.")
+                defaults["language"] = _detect_initial_language()
+                logger.info("No config file found – using defaults with detected language: %s", defaults["language"])
         except (json.JSONDecodeError, OSError) as exc:
+            defaults["language"] = _detect_initial_language()
             logger.warning("Failed to read config file: %s – using defaults.", exc)
         self._data = defaults
 

@@ -119,6 +119,10 @@ Source: "{staging_dir}\_internal\*"; DestDir: "{{app}}\_internal"; Flags: ignore
 Source: "{staging_dir}\bin\*"; DestDir: "{{app}}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{staging_dir}\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
+[INI]
+Filename: "{app}\install_lang.ini"; Section: "Setup"; Key: "Language"; String: "tr"; Languages: turkish
+Filename: "{app}\install_lang.ini"; Section: "Setup"; Key: "Language"; String: "en"; Languages: english
+
 [Icons]
 Name: "{{autoprograms}}\{app_name}"; Filename: "{{app}}\{app_exe}"; Tasks: startmenuicon
 Name: "{{autodesktop}}\{app_name}"; Filename: "{{app}}\{app_exe}"; Tasks: desktopicon

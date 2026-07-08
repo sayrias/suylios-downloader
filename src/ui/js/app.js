@@ -147,6 +147,17 @@
     state.apiReady = true;
     dom.loadingOverlay?.classList.add('hidden');
 
+    // Load app info dynamically
+    try {
+      const appInfo = await callApi('get_app_info');
+      if (appInfo && appInfo.version) {
+        state.appVersion = appInfo.version;
+        const verEl = $('#about-version-text');
+        const curLang = localStorage.getItem('suylios_language') || 'tr';
+        if (verEl) verEl.textContent = (curLang === 'en' ? 'Version ' : 'Sürüm ') + state.appVersion;
+      }
+    } catch(e) {}
+
     // Load settings
     const settings = await callApi('get_settings');
     if (settings) {
@@ -1256,7 +1267,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = lang === 'en' ? 'Version 1.3.4' : 'Sürüm 1.3.4';
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.6');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
