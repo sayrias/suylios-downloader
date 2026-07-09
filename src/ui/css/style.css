@@ -110,18 +110,24 @@ body::before {
 
 /* ─── CUSTOM SCROLLBAR ─── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 12px; /* Increased from 6px for easier grabbing */
+  height: 12px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+  margin: 4px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  border: 3px solid var(--bg-primary); /* Creates a padded look */
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.3);
+  border: 3px solid var(--bg-primary);
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
@@ -1863,6 +1869,33 @@ body[data-theme="sunset"] {
 .matrix-bg { background-image: url('../assets/themes/matrix.png'), linear-gradient(135deg, #050b06 20%, #00ff66 100%); }
 .blood-bg  { background-image: url('../assets/themes/crimson.png'), linear-gradient(135deg, #160a0e 20%, #ff2a6d 100%); }
 .sunset-bg { background-image: url('../assets/themes/gold.png'), linear-gradient(135deg, #181022 20%, #ff9e00 100%); }
+
+.theme-color-picker {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 32px;
+  height: 32px;
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.theme-color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.theme-color-picker::-webkit-color-swatch {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+.theme-color-picker::-moz-color-swatch {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
 
 .theme-name {
   font-size: 11px;

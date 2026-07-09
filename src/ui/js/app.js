@@ -164,11 +164,13 @@
     if (settings) {
       state.settings = settings;
       if (settings.theme) {
-        document.body.dataset.theme = settings.theme;
-        localStorage.setItem('suylios_theme', settings.theme);
-        document.querySelectorAll('.theme-card').forEach(c => {
-          c.classList.toggle('active', c.dataset.theme === settings.theme);
-        });
+        // selectTheme sets localStorage, dataset.theme, styles and UI active class
+        if (typeof selectTheme === 'function') {
+          selectTheme(settings.theme);
+        } else {
+          document.body.dataset.theme = settings.theme;
+          localStorage.setItem('suylios_theme', settings.theme);
+        }
       }
       applySettingsToUI(settings);
     }
@@ -1282,7 +1284,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.8');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.9');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
@@ -1609,22 +1611,289 @@
   }
 
   // ─── THEMES & APPEARANCE ───
-  function bindThemes() {
-    const savedTheme = localStorage.getItem('suylios_theme') || 'basit-beyaz';
-    document.body.dataset.theme = savedTheme;
+  
+  function applyCustomTheme(themeId, themesArray = null) {
+    let styleTag = document.getElementById('custom-theme-style-tag');
+    if (!styleTag) {
+      styleTag = document.createElement('style');
+      styleTag.id = 'custom-theme-style-tag';
+      document.head.appendChild(styleTag);
+    }
+    
+    if (themeId && themeId.startsWith('custom_')) {
+      const themes = themesArray || (state.settings?.custom_themes || []);
+      const theme = themes.find(t => t.id === themeId);
+      if (theme) {
+        // We set data-theme to the base template to inherit properties,
+        // then override the CSS variables using the style tag.
+        document.body.dataset.theme = theme.base;
+        
+        let css = `body[data-theme="${theme.base}"] {\n`;
+        if (theme.colors.bgPrimary) css += `  --bg-primary: ${theme.colors.bgPrimary} !important;\n`;
+        if (theme.colors.bgSecondary) css += `  --bg-secondary: ${theme.colors.bgSecondary} !important;\n  --bg-card: ${theme.colors.bgSecondary} !important;\n`;
+        if (theme.colors.textPrimary) css += `  --text-primary: ${theme.colors.textPrimary} !important;\n`;
+        if (theme.colors.textSecondary) css += `  --text-secondary: ${theme.colors.textSecondary} !important;\n`;
+        if (theme.colors.accent1) css += `  --accent-cyan: ${theme.colors.accent1} !important;\n`;
+        if (theme.colors.accent2) css += `  --accent-purple: ${theme.colors.accent2} !important;\n`;
+        
+        // Update gradient based on accents
+        if (theme.colors.accent1 && theme.colors.accent2) {
+          css += `  --accent-gradient: linear-gradient(135deg, ${theme.colors.accent1} 0%, ${theme.colors.accent2} 100%) !important;\n`;
+          css += `  --accent-gradient-h: linear-gradient(90deg, ${theme.colors.accent1} 0%, ${theme.colors.accent2} 100%) !important;\n`;
+        }
+        
+        css += `}\n`;
+        
+        // Also override titlebar colors if white base
+        if (theme.base === 'basit-beyaz') {
+           css += `body[data-theme="basit-beyaz"] .app-title { color: ${theme.colors.textPrimary} !important; }\n`;
+           css += `body[data-theme="basit-beyaz"] #titlebar { background: ${theme.colors.bgSecondary} !important; }\n`;
+        }
+        
+        styleTag.textContent = css;
+        return;
+      }
+    }
+    
+    // Built-in theme or fallback
+    document.body.dataset.theme = themeId || 'suylios';
+    styleTag.textContent = '';
+  }
 
-    const cards = document.querySelectorAll('.theme-card');
-    cards.forEach(card => {
+  function renderCustomThemes() {
+    const grid = document.getElementById('custom-themes-grid');
+    const emptyState = document.getElementById('custom-themes-empty');
+    if (!grid || !emptyState) return;
+    
+    // Remove existing custom cards
+    grid.querySelectorAll('.theme-card.custom-card').forEach(el => el.remove());
+    
+    const themes = state.settings?.custom_themes || [];
+    if (themes.length === 0) {
+      emptyState.style.display = 'block';
+      return;
+    }
+    
+    emptyState.style.display = 'none';
+    
+    const savedTheme = localStorage.getItem('suylios_theme') || 'suylios';
+    
+    themes.forEach(theme => {
+      const card = document.createElement('div');
+      card.className = 'theme-card custom-card';
+      if (savedTheme === theme.id) card.classList.add('active');
+      card.dataset.theme = theme.id;
+      card.dataset.isCustom = 'true';
+      
+      const grad = `linear-gradient(135deg, ${theme.colors.bgPrimary} 0%, ${theme.colors.bgSecondary} 100%)`;
+      
+      card.innerHTML = `
+        <div class="theme-preview" style="background: ${grad}; position:relative; overflow:hidden;">
+           <div style="position:absolute; bottom:0; left:0; width:100%; height:4px; background: linear-gradient(90deg, ${theme.colors.accent1}, ${theme.colors.accent2});"></div>
+           <button class="btn-edit-theme" style="position:absolute; top:8px; right:8px; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.2); color:#fff; border-radius:4px; cursor:pointer; font-size:11px; padding:2px 6px;">Düzenle</button>
+        </div>
+        <span class="theme-name">${escapeHtml(theme.name)}</span>
+      `;
+      
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-edit-theme')) {
+          openThemeEditor(theme);
+          return;
+        }
+        selectTheme(theme.id);
+      });
+      
+      grid.appendChild(card);
+    });
+  }
+
+  function selectTheme(themeId) {
+    applyCustomTheme(themeId);
+    localStorage.setItem('suylios_theme', themeId);
+    
+    document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
+    const activeCard = document.querySelector(`.theme-card[data-theme="${themeId}"]`);
+    if (activeCard) activeCard.classList.add('active');
+    
+    if (state.settings) {
+      state.settings.theme = themeId;
+      saveCurrentSettings();
+    }
+    showToast('Tema güncellendi', 'success');
+  }
+
+  function bindThemes() {
+    const savedTheme = localStorage.getItem('suylios_theme') || 'suylios';
+    applyCustomTheme(savedTheme);
+
+    const builtInCards = document.querySelectorAll('.theme-cards-grid:not(#custom-themes-grid) .theme-card');
+    builtInCards.forEach(card => {
       card.classList.toggle('active', card.dataset.theme === savedTheme);
       card.addEventListener('click', () => {
-        const theme = card.dataset.theme;
-        document.body.dataset.theme = theme;
-        localStorage.setItem('suylios_theme', theme);
-        cards.forEach(c => c.classList.remove('active'));
-        card.classList.add('active');
-        saveCurrentSettings();
-        showToast('Görünüm modu güncellendi', 'success');
+        selectTheme(card.dataset.theme);
       });
+    });
+    
+    renderCustomThemes();
+    bindThemeEditor();
+  }
+
+  function bindThemeEditor() {
+    const modal = document.getElementById('custom-theme-modal');
+    const btnCreate = document.getElementById('btn-create-theme');
+    const btnClose = document.getElementById('btn-close-theme-modal');
+    const btnCancel = document.getElementById('btn-cancel-theme');
+    const btnSave = document.getElementById('btn-save-theme');
+    const btnDelete = document.getElementById('btn-delete-theme');
+    
+    if (!modal || !btnCreate) return;
+    
+    const colorInputs = document.querySelectorAll('.theme-color-picker');
+    const baseSelect = document.getElementById('custom-theme-base');
+    
+    function updatePreview() {
+      const base = baseSelect.value;
+      const fakeThemeId = 'custom_preview';
+      const fakeTheme = {
+        id: fakeThemeId,
+        base: base,
+        colors: {
+          bgPrimary: document.getElementById('color-bg-primary').value,
+          bgSecondary: document.getElementById('color-bg-secondary').value,
+          textPrimary: document.getElementById('color-text-primary').value,
+          textSecondary: document.getElementById('color-text-secondary').value,
+          accent1: document.getElementById('color-accent-1').value,
+          accent2: document.getElementById('color-accent-2').value,
+        }
+      };
+      // Temporarily apply it
+      applyCustomTheme(fakeThemeId, [fakeTheme]);
+    }
+    
+    colorInputs.forEach(input => {
+      input.addEventListener('input', (e) => {
+        const hexSpan = document.getElementById('hex-' + e.target.id.replace('color-', ''));
+        if (hexSpan) hexSpan.textContent = e.target.value;
+        updatePreview();
+      });
+    });
+    
+    baseSelect.addEventListener('change', updatePreview);
+    
+    btnCreate.addEventListener('click', () => {
+      document.getElementById('custom-theme-id').value = '';
+      document.getElementById('custom-theme-name').value = '';
+      btnDelete.style.display = 'none';
+      modal.classList.remove('hidden');
+      // Set defaults based on suylios
+      document.getElementById('custom-theme-base').value = 'suylios';
+      
+      const setCol = (id, val) => {
+        const input = document.getElementById('color-' + id);
+        input.value = val;
+        document.getElementById('hex-' + id).textContent = val;
+      };
+      
+      setCol('bg-primary', '#0a0a0f');
+      setCol('bg-secondary', '#121214');
+      setCol('text-primary', '#ffffff');
+      setCol('text-secondary', '#a1a1aa');
+      setCol('accent-1', '#00f0ff');
+      setCol('accent-2', '#a855f7');
+      
+      updatePreview();
+    });
+    
+    window.openThemeEditor = function(theme) {
+      document.getElementById('custom-theme-id').value = theme.id;
+      document.getElementById('custom-theme-name').value = theme.name;
+      document.getElementById('custom-theme-base').value = theme.base;
+      
+      btnDelete.style.display = 'flex';
+      
+      const setCol = (id, val) => {
+        const input = document.getElementById('color-' + id);
+        input.value = val;
+        document.getElementById('hex-' + id).textContent = val;
+      };
+      
+      setCol('bg-primary', theme.colors.bgPrimary);
+      setCol('bg-secondary', theme.colors.bgSecondary);
+      setCol('text-primary', theme.colors.textPrimary);
+      setCol('text-secondary', theme.colors.textSecondary);
+      setCol('accent-1', theme.colors.accent1);
+      setCol('accent-2', theme.colors.accent2);
+      
+      modal.classList.remove('hidden');
+      updatePreview();
+    };
+    
+    const closeModal = () => {
+      modal.classList.add('hidden');
+      // Restore actual active theme
+      const currentTheme = localStorage.getItem('suylios_theme') || 'suylios';
+      applyCustomTheme(currentTheme);
+    };
+    
+    btnClose.addEventListener('click', closeModal);
+    btnCancel.addEventListener('click', closeModal);
+    
+    btnSave.addEventListener('click', () => {
+      const id = document.getElementById('custom-theme-id').value || ('custom_' + Date.now());
+      let name = document.getElementById('custom-theme-name').value.trim();
+      if (!name) name = 'Yeni Tema';
+      
+      const theme = {
+        id: id,
+        name: name,
+        base: document.getElementById('custom-theme-base').value,
+        colors: {
+          bgPrimary: document.getElementById('color-bg-primary').value,
+          bgSecondary: document.getElementById('color-bg-secondary').value,
+          textPrimary: document.getElementById('color-text-primary').value,
+          textSecondary: document.getElementById('color-text-secondary').value,
+          accent1: document.getElementById('color-accent-1').value,
+          accent2: document.getElementById('color-accent-2').value,
+        }
+      };
+      
+      if (!state.settings.custom_themes) {
+        state.settings.custom_themes = [];
+      }
+      
+      const existingIdx = state.settings.custom_themes.findIndex(t => t.id === id);
+      if (existingIdx >= 0) {
+        state.settings.custom_themes[existingIdx] = theme;
+      } else {
+        state.settings.custom_themes.push(theme);
+      }
+      
+      saveCurrentSettings();
+      renderCustomThemes();
+      selectTheme(id);
+      
+      modal.classList.add('hidden');
+    });
+    
+    btnDelete.addEventListener('click', () => {
+      const id = document.getElementById('custom-theme-id').value;
+      if (!id) return;
+      
+      if (!confirm('Bu temayı silmek istediğinize emin misiniz?')) return;
+      
+      if (state.settings.custom_themes) {
+        state.settings.custom_themes = state.settings.custom_themes.filter(t => t.id !== id);
+        saveCurrentSettings();
+      }
+      
+      const currentTheme = localStorage.getItem('suylios_theme');
+      if (currentTheme === id) {
+        selectTheme('suylios');
+      } else {
+        renderCustomThemes();
+      }
+      
+      modal.classList.add('hidden');
     });
   }
 
@@ -1771,7 +2040,7 @@
           </div>
           <div class="site-tags">
             <span class="site-tag ${tagClass}">${engineTag}</span>
-            <span class="site-tag tag-cyan">${item.features ? item.features.slice(0, 16) + (item.features.length > 16 ? '...' : '') : 'Özel Alt Klasör'}</span>
+            <span class="site-tag tag-cyan">${(item.features || item.Capabilities) ? (item.features || item.Capabilities).slice(0, 16) + ((item.features || item.Capabilities).length > 16 ? '...' : '') : 'Özel Alt Klasör'}</span>
           </div>
           <div style="display: flex; gap: 8px; width: 100%; margin-top: auto;">
             <button class="btn-site-config glow-btn" data-site="${item.key}" data-name="${item.name}" data-folder="${folderName}" style="flex: 1;">⚙️ Ayarla</button>

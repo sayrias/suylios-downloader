@@ -500,6 +500,7 @@ class DownloadManager:
                         raise ext_err
 
                     success = False
+                    gdl_auth_error = any(x in str(ext_err) for x in ("AuthRequired", "logged-in", "403", "Giriş/Cookie"))
                     for fb_cls in fallback_classes:
                         tried_extractors.add(fb_cls)
                         logger.warning("Extractor %s extract_info failed (%s), falling back to %s...", extractor.__class__.__name__, ext_err, fb_cls.__name__)
@@ -510,7 +511,12 @@ class DownloadManager:
                             fb_extractor._site_settings = config.get("site_settings", {})
                             fb_extractor._app_proxy = config.get("proxy", "")
                             info = fb_extractor.extract_info(task.url)
-                            extractor = fb_extractor
+                            # If the original extractor was GalleryDL and hit an auth error,
+                            # keep it for download so cookies are applied properly.
+                            if gdl_auth_error and extractor.__class__.__name__ == "GalleryDLExtractor":
+                                logger.info("Task %s – keeping GalleryDLExtractor for download despite metadata fallback (auth/cookie flow)", task.id)
+                            else:
+                                extractor = fb_extractor
                             success = True
                             break
                         except Exception as fb_err:
@@ -520,6 +526,9 @@ class DownloadManager:
                     if not success:
                         if "gofile.io" in task.url.lower():
                             raise ext_err
+                        # If GalleryDL hit auth error, keep it as the extractor – it will apply cookies on download
+                        if gdl_auth_error and extractor.__class__.__name__ == "GalleryDLExtractor":
+                            logger.info("Task %s – all metadata extractors failed; keeping GalleryDLExtractor for download with cookies", task.id)
                         info = {"title": task.url.split("/")[-1] or "Download"}
                 task.title = info.get("title", task.url)
                 task.thumbnail = info.get("thumbnail") or ""
@@ -541,65 +550,90 @@ class DownloadManager:
                 dl_dir = config.get_download_dir()
                 if config.get("create_subfolders", True) or config.get("subfolders", True):
                     url_lower = task.url.lower()
-                    if any(x in url_lower for x in ("youtube", "youtu.be", "ytimg")):
-                        site_key = "youtube"
-                        default_folder = "YouTube"
-                    elif "bunkr" in url_lower:
-                        site_key = "bunkr"
-                        default_folder = "Bunkr"
-                    elif "gofile" in url_lower:
-                        site_key = "gofile"
-                        default_folder = "Gofile"
-                    elif "pixel" in url_lower:
-                        site_key = "pixeldrain"
-                        default_folder = "Pixeldrain"
-                    elif "tiktok" in url_lower:
-                        site_key = "tiktok"
-                        default_folder = "TikTok"
-                    elif any(x in url_lower for x in ("twitter", "x.com")):
-                        site_key = "twitter"
-                        default_folder = "Twitter"
-                    elif "instagram" in url_lower:
-                        site_key = "instagram"
-                        default_folder = "Instagram"
-                    elif "reddit" in url_lower:
-                        site_key = "reddit"
-                        default_folder = "Reddit"
-                    elif "pornhub" in url_lower:
-                        site_key = "pornhub"
-                        default_folder = "Pornhub"
-                    elif "xvideos" in url_lower:
-                        site_key = "xvideos"
-                        default_folder = "XVideos"
-                    elif "rule34" in url_lower:
-                        site_key = "rule34"
-                        default_folder = "Rule34"
-                    elif any(x in url_lower for x in ("hanime", "hentai.tv")):
-                        site_key = "hanime"
-                        default_folder = "Hanime"
-                    elif "hitomi" in url_lower:
-                        site_key = "hitomi"
-                        default_folder = "Hitomi"
-                    elif any(x in url_lower for x in ("e-hentai", "exhentai")):
-                        site_key = "ehentai"
-                        default_folder = "E-Hentai"
-                    else:
-                        site_key = "other"
-                        default_folder = "Others"
+                    site_key = None
+                    default_folder = None
+                    
+                    # 1. Check Custom Sites FIRST
+                    custom_sites = config.get("custom_sites", [])
+                    if custom_sites:
+                        url_stripped = task.url.replace("_", "").replace(".", "").replace("-", "")
+                        for cs in custom_sites:
+                            c_key = cs.get("key", "")
+                            c_domain = cs.get("domain", "")
+                            key_dotted = c_key.replace("_", ".").replace("-", ".")
+                            key_stripped = c_key.replace("_", "").replace(".", "").replace("-", "")
+                            if (
+                                (c_domain and c_domain.lower() in url_lower)
+                                or key_dotted in url_lower
+                                or (len(key_stripped) > 3 and key_stripped in url_stripped)
+                            ):
+                                site_key = c_key
+                                default_folder = cs.get("folder") or cs.get("name")
+                                break
+
+                    # 2. Check hardcoded sites if no custom site matched
+                    if not site_key:
+                        if any(x in url_lower for x in ("youtube", "youtu.be", "ytimg")):
+                            site_key = "youtube"
+                            default_folder = "YouTube"
+                        elif "bunkr" in url_lower:
+                            site_key = "bunkr"
+                            default_folder = "Bunkr"
+                        elif "gofile" in url_lower:
+                            site_key = "gofile"
+                            default_folder = "Gofile"
+                        elif "pixel" in url_lower:
+                            site_key = "pixeldrain"
+                            default_folder = "Pixeldrain"
+                        elif "tiktok" in url_lower:
+                            site_key = "tiktok"
+                            default_folder = "TikTok"
+                        elif any(x in url_lower for x in ("twitter", "x.com")):
+                            site_key = "twitter"
+                            default_folder = "Twitter"
+                        elif "instagram" in url_lower:
+                            site_key = "instagram"
+                            default_folder = "Instagram"
+                        elif "reddit" in url_lower:
+                            site_key = "reddit"
+                            default_folder = "Reddit"
+                        elif "pornhub" in url_lower:
+                            site_key = "pornhub"
+                            default_folder = "Pornhub"
+                        elif "xvideos" in url_lower:
+                            site_key = "xvideos"
+                            default_folder = "XVideos"
+                        elif "rule34" in url_lower:
+                            site_key = "rule34"
+                            default_folder = "Rule34"
+                        elif any(x in url_lower for x in ("hanime", "hentai.tv")):
+                            site_key = "hanime"
+                            default_folder = "Hanime"
+                        elif "hitomi" in url_lower:
+                            site_key = "hitomi"
+                            default_folder = "Hitomi"
+                        elif any(x in url_lower for x in ("e-hentai", "exhentai")):
+                            site_key = "ehentai"
+                            default_folder = "E-Hentai"
+                        else:
+                            site_key = "other"
+                            default_folder = "Others"
 
                     site_cfg = config.get("site_settings", {}).get(site_key, {})
                     folder_name = site_cfg.get("folder") or default_folder
                     dl_dir = str(Path(dl_dir) / folder_name)
 
-                    # Create subfolder ONLY for youtube playlists (other extractors like bunkr/gofile already create their own folder)
+                    # Create subfolder for playlists and galleries
                     is_playlist_or_archive = (
-                        site_key == "youtube" and (
+                        (site_key == "youtube" and (
                             "list=" in url_lower or "playlist" in url_lower
                             or info.get("_type") == "playlist"
                             or info.get("is_playlist")
                             or (info.get("playlist_count") or 0) > 1
                             or info.get("entries") is not None
-                        )
+                        ))
+                        or info.get("is_playlist") is True
+                        or site_key == "simpcity_cr"
                     )
                     if is_playlist_or_archive and task.title:
                         safe_title = re.sub(r'[\\/*?:"<>|]', "", str(task.title)).strip()

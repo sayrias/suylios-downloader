@@ -436,6 +436,19 @@
                   <span class="theme-name">Günbatımı Gold (Sarı)</span>
                 </div>
               </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:30px; margin-bottom:15px;">
+                <h3 style="margin:0; font-size:16px; color:var(--text-primary); font-weight:600;">Özel Temalar</h3>
+                <button id="btn-create-theme" class="btn-primary btn-sm glow-btn">
+                  <svg viewBox="0 0 24 24" width="16" height="16" style="margin-right:6px;"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                  Yeni Tema Oluştur
+                </button>
+              </div>
+              <div id="custom-themes-grid" class="theme-cards-grid" style="margin-bottom:20px;">
+                <!-- Özel temalar JS ile buraya eklenecek -->
+                <div id="custom-themes-empty" style="grid-column: 1 / -1; text-align:center; padding:30px; background:rgba(0,0,0,0.2); border-radius:12px; border:1px dashed var(--border-subtle); color:var(--text-tertiary);">
+                  Henüz özel tema oluşturmadınız.
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1197,7 +1210,7 @@
                   </svg>
                 </div>
                 <h1 class="about-title">Suylios Downloader</h1>
-                <span class="about-version" id="about-version-text">Sürüm 1.3.8</span>
+                <span class="about-version" id="about-version-text">Sürüm 1.3.9</span>
                 <p class="about-desc">Hızlı, güvenilir ve şık medya indirici</p>
               </div>
               <div style="margin: 20px 0; display: flex; justify-content: center;">
@@ -1710,16 +1723,113 @@
     </div>
   </div>
 
-  <!-- Auto-Shutdown Countdown Overlay -->
-  <div id="shutdown-countdown-overlay" class="modal-overlay hidden" style="z-index: 200000; background:rgba(0,0,0,0.8);">
-    <div class="modal-content glass-panel" style="max-width:340px; text-align:center; border-color:rgba(239,68,68,0.5);">
-      <div style="font-size:48px; margin-bottom:8px;" id="shutdown-countdown-icon">⚡</div>
-      <h3 id="shutdown-countdown-title" style="color:#f87171;">Bilgisayar Kapanıyor</h3>
-      <p id="shutdown-countdown-msg" style="color:var(--text-secondary); font-size:13px; margin:10px 0;">İndirmeler tamamlandı. Bilgisayar kapatılıyor.</p>
-      <div style="font-size:56px; font-weight:900; color:#f87171; margin:16px 0;" id="shutdown-countdown-num">60</div>
-      <button id="btn-abort-shutdown" class="btn-danger" style="width:100%;">✕ İptal Et (Abort)</button>
+  <!-- Custom Theme Modal -->
+  <div id="custom-theme-modal" class="modal-overlay hidden" style="z-index: 150000; background:rgba(0,0,0,0.7);">
+    <div class="modal-content glass-panel" style="max-width:480px; width:95%; border:1px solid var(--accent-cyan);">
+      <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0; font-size:18px; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L4.35 18.25c-.39.39-.39 1.02 0 1.41.39.39 1.02.39 1.41 0l.64-.64C7.93 20.26 9.88 21 12 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm0 16c-3.86 0-7-3.14-7-7s3.14-7 7-7 7 3.14 7 7-3.14 7-7 7zm-3-8c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm6 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm-3 4c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2z"/></svg>
+          Tema Düzenleyici
+        </h3>
+        <button id="btn-close-theme-modal" class="modal-close-btn">✕</button>
+      </div>
+      <div style="padding:20px; overflow-y:auto; max-height:60vh;">
+        <input type="hidden" id="custom-theme-id" value="">
+        
+        <div style="margin-bottom:15px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Tema Adı</label>
+          <input type="text" id="custom-theme-name" class="settings-input" placeholder="Örn: Gece Yarısı Mavisi" style="width:100%; border-color:var(--border-light);">
+        </div>
+        
+        <div style="margin-bottom:20px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Şablon Seç (Başlangıç Renkleri)</label>
+          <div class="select-wrapper" style="width:100%;">
+            <select id="custom-theme-base" style="width:100%; padding:10px; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border-light); border-radius:8px; outline:none; font-family:inherit;">
+              <option value="suylios">Suylios Siber (Koyu/Mavi)</option>
+              <option value="basit-beyaz">Basit Beyaz (Açık/Mavi)</option>
+              <option value="basit-koyu">Basit Koyu (Koyu/Gri)</option>
+              <option value="matrix">Matrix (Siyah/Yeşil)</option>
+              <option value="blood">Blood (Siyah/Kırmızı)</option>
+              <option value="sunset">Sunset (Koyu Mor/Sarı)</option>
+            </select>
+          </div>
+        </div>
+        
+        <div style="border-top:1px solid var(--border-subtle); margin:20px 0;"></div>
+        
+        <h4 style="margin:0 0 15px 0; font-size:14px; color:var(--text-primary);">Renkleri Kişiselleştir</h4>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+          <!-- BG Primary -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Ana Arka Plan</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-bg-primary" class="theme-color-picker" value="#0a0a0f">
+              <span id="hex-bg-primary" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#0a0a0f</span>
+            </div>
+          </div>
+          
+          <!-- BG Secondary (Card) -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Kart Arka Planı</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-bg-secondary" class="theme-color-picker" value="#121214">
+              <span id="hex-bg-secondary" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#121214</span>
+            </div>
+          </div>
+          
+          <!-- Text Primary -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Ana Metin Rengi</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-text-primary" class="theme-color-picker" value="#ffffff">
+              <span id="hex-text-primary" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#ffffff</span>
+            </div>
+          </div>
+          
+          <!-- Text Secondary -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">İkincil Metin Rengi</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-text-secondary" class="theme-color-picker" value="#a1a1aa">
+              <span id="hex-text-secondary" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#a1a1aa</span>
+            </div>
+          </div>
+          
+          <!-- Accent Cyan -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Vurgu Rengi 1</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-accent-1" class="theme-color-picker" value="#00f0ff">
+              <span id="hex-accent-1" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#00f0ff</span>
+            </div>
+          </div>
+          
+          <!-- Accent Purple -->
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Vurgu Rengi 2</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="color-accent-2" class="theme-color-picker" value="#a855f7">
+              <span id="hex-accent-2" style="font-size:12px; font-family:monospace; color:var(--text-primary);">#a855f7</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div style="padding:14px 20px; border-top:1px solid var(--border-subtle); background:rgba(0,0,0,0.1); display:flex; justify-content:space-between; border-bottom-left-radius:12px; border-bottom-right-radius:12px;">
+        <button id="btn-delete-theme" class="btn-secondary" style="color:#ef4444; border-color:rgba(239,68,68,0.3); display:none;">
+          <svg viewBox="0 0 24 24" width="16" height="16" style="margin-right:6px;"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          Sil
+        </button>
+        <div style="display:flex; gap:10px; margin-left:auto;">
+          <button id="btn-cancel-theme" class="btn-secondary">İptal</button>
+          <button id="btn-save-theme" class="btn-primary glow-btn">Kaydet</button>
+        </div>
+      </div>
     </div>
   </div>
+
+  <!-- Auto-Shutdown Countdown Overlay -->
 
   <!-- Update Modal -->
   <div id="update-modal" class="modal-overlay hidden" style="z-index: 150000;">
@@ -1732,7 +1842,7 @@
         </svg>
       </div>
       <h3 id="update-modal-title" style="color: var(--text-primary); font-size: 20px; margin-bottom: 6px;">Yeni Sürüm Mevcut!</h3>
-      <p id="update-modal-ver" style="color: var(--accent-purple); font-weight: 700; font-size: 16px; margin-bottom: 12px;">v1.3.8</p>
+      <p id="update-modal-ver" style="color: var(--accent-purple); font-weight: 700; font-size: 16px; margin-bottom: 12px;">v1.3.9</p>
       <div id="update-modal-notes" style="max-height: 140px; overflow-y: auto; text-align: left; background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 16px; word-break: break-word;"></div>
       
       <!-- Update Progress Container (Hidden by default) -->

@@ -349,14 +349,31 @@ class YtdlpExtractor(BaseExtractor):
             opts["cachedir"] = str(ytdlp_cache)
 
         # Cookies file support from site settings
-        task_url = getattr(self, "_task_url", "").lower()
+        task_url = (url or getattr(self, "_task_url", "")).lower()
         sites = config.get("site_settings", {})
+        custom_sites = {cs.get("key", ""): cs.get("domain", "") for cs in config.get("custom_sites", []) if isinstance(cs, dict)}
         for site_key, s_data in sites.items():
+            if not isinstance(s_data, dict):
+                continue
             match_key = "youtu" if site_key == "youtube" else site_key
-            if (match_key in task_url or site_key == "other") and isinstance(s_data, dict):
+            domain_key = custom_sites.get(site_key, "")
+            key_dotted = site_key.replace("_", ".").replace("-", ".")
+            key_stripped = site_key.replace("_", "").replace(".", "").replace("-", "")
+            url_stripped = task_url.replace("_", "").replace(".", "").replace("-", "")
+            is_match = (
+                match_key in task_url
+                or (domain_key and domain_key.lower() in task_url)
+                or key_dotted in task_url
+                or (len(key_stripped) > 3 and key_stripped in url_stripped)
+                or site_key == "other"
+            )
+            if is_match:
                 cookies_path = s_data.get("cookies", "").strip()
-                if cookies_path and Path(cookies_path).is_file():
-                    opts["cookiefile"] = str(cookies_path)
+                if cookies_path:
+                    if Path(cookies_path).is_file():
+                        opts["cookiefile"] = str(cookies_path)
+                    elif cookies_path.lower() in ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "safari", "chromium"):
+                        opts["cookiesfrombrowser"] = (cookies_path.lower(), None, None, None)
                     break
 
         return opts
