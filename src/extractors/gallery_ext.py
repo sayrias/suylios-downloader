@@ -309,9 +309,14 @@ class GalleryDLExtractor(BaseExtractor):
             original_handle_url = getattr(job, 'handle_url', None)
             original_handle_queue = getattr(job, 'handle_queue', None)
 
-            def _patched_handle_url(url_tuple):
+            def _patched_handle_url(url_or_tuple, kwdict=None):
                 nonlocal downloaded_count, last_file
-                result = original_handle_url(url_tuple)
+                # gallery-dl >= 1.27 calls handle_url(url, kwdict) with 2 args.
+                # Older versions call handle_url((url, kwdict)) with 1 tuple arg.
+                if kwdict is not None:
+                    result = original_handle_url(url_or_tuple, kwdict)
+                else:
+                    result = original_handle_url(url_or_tuple)
                 downloaded_count += 1
                 if hasattr(job, 'pathfmt') and job.pathfmt:
                     last_file = getattr(job.pathfmt, 'path', '') or \
