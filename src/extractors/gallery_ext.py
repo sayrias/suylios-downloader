@@ -27,12 +27,20 @@ class GalleryDLExtractor(BaseExtractor):
     @staticmethod
     def can_handle(url: str) -> bool:
         """Return ``True`` when gallery-dl has a matching extractor."""
+        if not url:
+            return False
         try:
             import gallery_dl.extractor
             result = gallery_dl.extractor.find(url)
-            return result is not None
+            if result is not None:
+                return True
         except Exception:
-            return False
+            pass
+        # Fallback check for major gallery-dl domains when running in frozen exe where dynamic import might be slow/partial
+        url_lower = url.lower()
+        if any(domain in url_lower for domain in ("simpcity.cr", "simpcity.su", "danbooru", "gelbooru", "e-hentai", "imgur.com", "imgbox.com", "realbooru", "rule34.xxx")):
+            return True
+        return False
 
     def _configure_cookies_and_proxy(self, gdl_config, url: str) -> None:
         from src.config import config

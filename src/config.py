@@ -110,10 +110,46 @@ def _get_appdata_dir() -> Path:
     if _is_portable():
         data_dir = _get_app_root() / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
+        legacy_paths = [
+            Path(os.environ.get("APPDATA", "")) / "Suylios Downloader",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "SuyliosDownloader",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Suylios Downloader" / "data",
+        ]
+        for fname in ("config.json", "history.json"):
+            target_file = data_dir / fname
+            if not target_file.exists():
+                for leg_dir in legacy_paths:
+                    leg_file = leg_dir / fname
+                    if leg_file.exists() and leg_file.resolve() != target_file.resolve():
+                        try:
+                            shutil.copy2(leg_file, target_file)
+                            logger.info("Migrated user data (%s) to portable folder from %s", fname, leg_file)
+                            break
+                        except Exception:
+                            pass
         return data_dir
-    appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
-    cfg_dir = Path(appdata) / "SuyliosDownloader"
+
+    roaming = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA") or str(Path.home())
+    cfg_dir = Path(roaming) / "Suylios Downloader"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    legacy_paths = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "SuyliosDownloader",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Suylios Downloader" / "data",
+        _get_app_root() / "data",
+    ]
+    for fname in ("config.json", "history.json"):
+        target_file = cfg_dir / fname
+        if not target_file.exists():
+            for leg_dir in legacy_paths:
+                leg_file = leg_dir / fname
+                if leg_file.exists() and leg_file.resolve() != target_file.resolve():
+                    try:
+                        shutil.copy2(leg_file, target_file)
+                        logger.info("Migrated user data (%s) to %s from %s", fname, target_file, leg_file)
+                        break
+                    except Exception as exc:
+                        logger.warning("Could not migrate %s from %s: %s", fname, leg_file, exc)
     return cfg_dir
 
 
