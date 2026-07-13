@@ -256,5 +256,12 @@
   "TAR.GZ (.tar.gz)": "TAR.GZ (.tar.gz)",
   "TAR.BZ2 (.tar.bz2)": "TAR.BZ2 (.tar.bz2)",
   "Arşivledikten Sonra Orijinal Dosyaları Sil": "Delete Original Files After Archiving",
-  "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil": "Delete the original folder and its contents after a successful compression archive"
+  "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil": "Delete the original folder and its contents after a successful compression archive",
+  "video_converter_title": "🎬 Video Converter",
+  "video_converter_desc": "Convert videos, music, and files with one click",
+  "file_picker_select": "Select File",
+  "file_picker_target": "Select",
+  "add_to_queue": "Add to Queue",
+  "converter_empty_queue": "No files to convert",
+  "converter_empty_queue_desc": "Click the file selection button above"
 }

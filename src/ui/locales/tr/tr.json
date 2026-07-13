@@ -248,5 +248,12 @@
   "TAR.GZ (.tar.gz)": "TAR.GZ (.tar.gz)",
   "TAR.BZ2 (.tar.bz2)": "TAR.BZ2 (.tar.bz2)",
   "Arşivledikten Sonra Orijinal Dosyaları Sil": "Arşivledikten Sonra Orijinal Dosyaları Sil",
-  "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil": "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil"
+  "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil": "Başarılı bir sıkıştırma işleminden sonra orijinal klasörü ve içindekileri sil",
+  "video_converter_title": "🎬 Video Dönüştürücü",
+  "video_converter_desc": "Videolarını, müziklerini ve dosyalarını tek tıkla dönüştür",
+  "file_picker_select": "Dosya Seç",
+  "file_picker_target": "Seç",
+  "add_to_queue": "Kuyruğa Ekle",
+  "converter_empty_queue": "Dönüştürülecek dosya yok",
+  "converter_empty_queue_desc": "Yukarıdaki dosya seç butonuna tıkla"
 }

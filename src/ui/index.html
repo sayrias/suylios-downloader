@@ -56,6 +56,9 @@
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span id="scheduled-badge" class="badge hidden" style="position:absolute; bottom:2px; right:2px; width:8px; height:8px; background:#ef4444; border-radius:50%; box-shadow:0 0 4px #ef4444;"></span>
         </button>
+        <button class="titlebar-nav-btn" data-page="converter" title="Video Dönüştürücü">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 8v8l6-4-6-4zm6.5-5.7L15 3.75C16.89 4.54 18.45 5.87 19.5 7.5H17v2h6V3.5h-2v2.24C19.56 3.51 17.19 2 14.5 2l-1 .3zM7.5 18.25C5.61 17.46 4.05 16.13 3 14.5h2.5v-2H-1v6h2v-2.24C2.44 18.49 4.81 20 7.5 20l1-.3L10 18.25 7.5 18.25zM7 10.5H5V8.5C3.5 9.5 2.5 11 2.5 12.75c0 1.6.8 3.04 2 3.9V18l2.5-2.5V10.5zm10 3V18l2-2V10.5h-2v1.5c-1.5-1-2.5-2.5-2.5-4.25 0-1.6-.8-3.04-2-3.9V0L10 2.5 7 5.5h2V8l3-3 2 2V8.5c1.5 1 2.5 2.5 2.5 4.25 0 .25-.02.5-.5.75"/></svg>
+        </button>
         <button class="titlebar-nav-btn" data-page="settings" title="Ayarlar">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1112 8.4a3.6 3.6 0 010 7.2z"/></svg>
         </button>
@@ -209,6 +212,66 @@
 
         <!-- Download Cards Container -->
         <div id="download-list" class="download-list"></div>
+      </div>
+    </section>
+
+    <!-- ─── CONVERTER PAGE ─── -->
+    <section id="page-converter" class="page">
+      <div class="converter-page-layout">
+
+        <!-- Add conversion zone (top area) -->
+        <div class="converter-add-zone glass-panel" style="text-align: center;">
+          <div class="converter-add-header">
+            <h2 data-i18n="video_converter_title">🎬 Video Dönüştürücü</h2>
+            <p data-i18n="video_converter_desc">Videolarını, müziklerini ve dosyalarını tek tıkla dönüştür</p>
+          </div>
+          <div class="converter-add-row" style="justify-content: center;">
+            <!-- Plus button: file picker -->
+            <button class="converter-pick-btn" id="btn-converter-pick" title="Dosya Seç">
+              <svg viewBox="0 0 24 24" width="36" height="36" id="btn-converter-pick-icon"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              <img id="btn-converter-pick-img" style="display:none; width:100%; height:100%; object-fit:cover; border-radius:12px; margin-bottom: 4px;" />
+              <span id="btn-converter-pick-text" data-i18n="file_picker_select">Dosya Seç</span>
+            </button>
+
+            <!-- Source extension display -->
+            <div class="converter-ext-box converter-src-ext" id="converter-src-ext">
+              <span id="converter-src-ext-label">—</span>
+            </div>
+
+            <!-- Arrow -->
+            <div class="converter-arrow">
+              <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+            </div>
+
+            <!-- Target extension selector -->
+            <div class="converter-ext-box converter-dst-ext" id="converter-dst-ext-btn" title="Hedef format seç">
+              <span id="converter-dst-ext-label" data-i18n="file_picker_target">Seç</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" style="margin-left:6px; opacity:0.6;"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+              <!-- Dropdown -->
+              <div class="converter-format-dropdown hidden" id="converter-format-dropdown">
+                <!-- populated by JS -->
+              </div>
+            </div>
+
+            <!-- Add button -->
+            <button class="btn-primary glow-btn converter-add-btn" id="btn-converter-add" disabled>
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              <span data-i18n="add_to_queue">Kuyruğa Ekle</span>
+            </button>
+          </div>
+          <!-- hidden file input -->
+          <input type="file" id="converter-file-input" style="display:none" accept="video/*,audio/*,image/*,.mkv,.avi,.mov,.webm,.flac,.wav,.ogg,.m4a,.aac,.ts">
+        </div>
+
+        <!-- Conversion queue -->
+        <div class="converter-queue" id="converter-queue">
+          <div class="converter-queue-empty" id="converter-queue-empty">
+            <svg viewBox="0 0 24 24" width="56" height="56" style="opacity:0.2;"><path fill="currentColor" d="M10 8v8l6-4-6-4zm11.5 4c0 5.52-4.48 10-10 10S1.5 17.52 1.5 12 5.98 2 11.5 2s10 4.48 10 10zm-2 0c0-4.42-3.58-8-8-8s-8 3.58-8 8 3.58 8 8 8 8-3.58 8-8z"/></svg>
+            <p>Dönüştürülecek dosya yok</p>
+            <span>Yukarıdaki dosya seç butonuna tıkla</span>
+          </div>
+        </div>
+
       </div>
     </section>
 
@@ -400,6 +463,7 @@
                   <button id="btn-open-shutdown-modal" class="btn-secondary btn-sm" style="font-size:12px;">⏰ Ayarla</button>
                 </div>
               </div>
+
             </div>
           </div>
 
@@ -1128,6 +1192,18 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
+                  <span class="setting-label">Sıralı İndirme</span>
+                  <span class="setting-desc">Aktif olduğunda indirmeler aynı anda değil, sırayla işlenir (birincisi bitmeden ikincisi başlamaz)</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-sequential-download">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
                   <span class="setting-label">Hız sınırı</span>
                   <span class="setting-desc">0 = Sınırsız (MB/s cinsinden)</span>
                 </div>
@@ -1322,7 +1398,7 @@
 
   <!-- Download Card Template -->
   <template id="download-card-template">
-    <div class="download-card glass-panel" data-task-id="">
+    <div class="download-card glass-panel" data-task-id="" draggable="true">
       <div class="card-thumb-column">
         <div class="card-site-icon">
           <svg viewBox="0 0 24 24" width="36" height="36"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
@@ -1373,6 +1449,15 @@
             <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
         </div>
+      </div>
+      <!-- Reorder buttons - floating on the side -->
+      <div class="card-reorder-btns">
+        <button class="card-reorder-btn btn-move-up" title="Yukarı Taşı">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>
+        </button>
+        <button class="card-reorder-btn btn-move-down" title="Aşağı Taşı">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/></svg>
+        </button>
       </div>
     </div>
   </template>

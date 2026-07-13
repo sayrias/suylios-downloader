@@ -36,6 +36,7 @@
     dom.pageSettings = $('#page-settings');
     dom.pageHistory = $('#page-history');
     dom.pageScheduled = $('#page-scheduled');
+    dom.pageConverter = $('#page-converter');
 
     dom.clipboardBanner = $('#clipboard-banner');
     dom.historyList = $('#history-list');
@@ -353,7 +354,7 @@
   }
 
   function switchPage(page) {
-    const pages = { main: dom.pageMain, settings: dom.pageSettings, history: dom.pageHistory, scheduled: dom.pageScheduled };
+    const pages = { main: dom.pageMain, settings: dom.pageSettings, history: dom.pageHistory, scheduled: dom.pageScheduled, converter: dom.pageConverter };
     const currentEl = pages[state.currentPage];
     const targetEl = pages[page];
     if (!currentEl || !targetEl) return;
@@ -377,6 +378,8 @@
       renderHistory();
     } else if (page === 'scheduled') {
       toggleScheduledEmptyState();
+    } else if (page === 'converter') {
+      // converter page shown — nothing extra needed
     }
   }
 
@@ -686,6 +689,7 @@
     updateStatusBar(downloads);
     toggleEmptyState();
     toggleScheduledEmptyState();
+    updateReorderButtonsVisibility();
   }
 
   function toggleEmptyState() {
@@ -706,8 +710,28 @@
     }
   }
 
+  function updateReorderButtonsVisibility() {
+    [dom.downloadList, dom.scheduledList].forEach(list => {
+      if (!list) return;
+      const cards = Array.from(list.querySelectorAll('.download-card'));
+      cards.forEach((card, index) => {
+        const upBtn = card.querySelector('.btn-move-up');
+        const downBtn = card.querySelector('.btn-move-down');
+        if (upBtn) upBtn.style.display = (index === 0) ? 'none' : 'flex';
+        if (downBtn) downBtn.style.display = (index === cards.length - 1) ? 'none' : 'flex';
+      });
+    });
+  }
+
   // ─── DOWNLOAD CARD CREATION ───
   function createDownloadCard(dl) {
+    // Guard: if card already exists in DOM, just update it
+    const existing = $(`.download-card[data-task-id="${dl.id}"]`);
+    if (existing) {
+      updateDownloadCard(dl);
+      return;
+    }
+
     const template = dom.cardTemplate.content.cloneNode(true);
     const card = template.querySelector('.download-card');
 
@@ -720,24 +744,30 @@
 
     // Bind actions
     bindCardActions(card, dl.id);
+    bindCardReorder(card);
+    bindCardDragDrop(card);
 
     const isScheduled = dl.scheduled_at && dl.scheduled_at > 0;
     if (isScheduled && dom.scheduledList) {
-      dom.scheduledList.prepend(card);
+      dom.scheduledList.appendChild(card);
       toggleScheduledEmptyState();
     } else {
-      dom.downloadList.prepend(card);
+      dom.downloadList.appendChild(card);
       toggleEmptyState();
     }
   }
 
   function updateDownloadCard(dl) {
     const card = $(`.download-card[data-task-id="${dl.id}"]`);
-    if (!card) return;
+    if (!card) {
+      // Card not in DOM yet — create it
+      createDownloadCard(dl);
+      return;
+    }
 
     const isScheduled = dl.scheduled_at && dl.scheduled_at > 0;
     if (!isScheduled && dom.scheduledList && card.parentElement === dom.scheduledList) {
-      dom.downloadList.prepend(card);
+      dom.downloadList.appendChild(card);
       toggleScheduledEmptyState();
       toggleEmptyState();
     }
@@ -1284,7 +1314,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.3.9');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.0');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
@@ -1443,6 +1473,49 @@
       const el = $('#setting-start-minimized');
       if (el) el.checked = settings.start_minimized;
     }
+    if (settings.sequential_download !== undefined) {
+      const el = $('#setting-sequential-download');
+      if (el) {
+        el.checked = settings.sequential_download;
+        // If sequential is checked, force concurrent to 1 in the UI and disable it
+        const concEl = dom.settingConcurrent;
+        if (concEl) {
+          if (settings.sequential_download) {
+            concEl.dataset.prevValue = concEl.value;
+            concEl.value = '1';
+            concEl.disabled = true;
+          } else {
+            if (concEl.dataset.prevValue) {
+              concEl.value = concEl.dataset.prevValue;
+            }
+            concEl.disabled = false;
+          }
+        }
+      }
+    }
+    
+    // Add real-time listener for sequential toggle
+    const seqEl = $('#setting-sequential-download');
+    if (seqEl && !seqEl.dataset.bound) {
+      seqEl.dataset.bound = 'true';
+      seqEl.addEventListener('change', () => {
+        const concEl = dom.settingConcurrent;
+        if (concEl) {
+          if (seqEl.checked) {
+            concEl.dataset.prevValue = concEl.value;
+            concEl.value = '1';
+            concEl.disabled = true;
+          } else {
+            if (concEl.dataset.prevValue) {
+              concEl.value = concEl.dataset.prevValue;
+            }
+            concEl.disabled = false;
+          }
+        }
+        saveCurrentSettings();
+      });
+    }
+
     syncCustomSelects();
     renderCustomSites();
   }
@@ -1467,10 +1540,10 @@
       default_quality: $('#setting-default-quality')?.value || 'best',
       mp3_bitrate: parseInt($('#setting-mp3-bitrate')?.value) || 192,
       concurrent_downloads: dom.settingConcurrent && dom.settingConcurrent.value !== '' ? parseInt(dom.settingConcurrent.value, 10) : 0,
+      sequential_download: $('#setting-sequential-download')?.checked ?? false,
       speed_limit: (parseFloat($('#setting-speed-limit')?.value) || 0) * 1024 * 1024,
       proxy: $('#setting-proxy')?.value || '',
       ffmpeg_path: $('#setting-ffmpeg-path')?.value || '',
-      start_minimized: $('#setting-start-minimized')?.checked ?? false,
       theme: document.body.dataset.theme || 'suylios',
       site_settings: state.settings?.site_settings || {},
       custom_sites: state.settings?.custom_sites || [],
@@ -3100,6 +3173,502 @@
     initTrimRow();
     initShutdownModal();
     initPreviewModal();
+    initConverterPage();
   });
+
+  // ═══════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
+  // CARD REORDER ─ Up / Down Buttons
+  // ═══════════════════════════════════════════════════════
+  function syncTaskOrder() {
+    const list = document.getElementById('download-list');
+    if (!list) return;
+    const cards = list.querySelectorAll('.download-card');
+    const ids = Array.from(cards).map(c => c.dataset.taskId).filter(Boolean);
+    if (ids.length > 0) {
+      callApi('reorder_tasks', ids);
+    }
+  }
+
+  function bindCardReorder(card) {
+    const upBtn = card.querySelector('.btn-move-up');
+    const downBtn = card.querySelector('.btn-move-down');
+    if (!upBtn || !downBtn) return;
+
+    upBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const prev = card.previousElementSibling;
+      if (prev && prev.classList.contains('download-card')) {
+        card.parentElement.insertBefore(card, prev);
+        flashCard(card);
+        updateReorderButtonsVisibility();
+        syncTaskOrder();
+      }
+    });
+
+    downBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = card.nextElementSibling;
+      if (next && next.classList.contains('download-card')) {
+        card.parentElement.insertBefore(next, card);
+        flashCard(card);
+        updateReorderButtonsVisibility();
+        syncTaskOrder();
+      }
+    });
+  }
+
+  function flashCard(card) {
+    card.style.transition = 'box-shadow 0.15s ease';
+    card.style.boxShadow = '0 0 0 2px rgba(0,240,255,0.45)';
+    setTimeout(() => { card.style.boxShadow = ''; }, 350);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CARD DRAG & DROP Reordering
+  // ═══════════════════════════════════════════════════════
+  let _dragSrc = null;
+
+  function bindCardDragDrop(card) {
+    card.addEventListener('dragstart', (e) => {
+      _dragSrc = card;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', card.dataset.taskId || '');
+    });
+
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      document.querySelectorAll('.download-card.drag-over').forEach(c => c.classList.remove('drag-over'));
+      _dragSrc = null;
+    });
+
+    card.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (_dragSrc && _dragSrc !== card) {
+        document.querySelectorAll('.download-card.drag-over').forEach(c => c.classList.remove('drag-over'));
+        card.classList.add('drag-over');
+      }
+    });
+
+    card.addEventListener('dragleave', () => {
+      card.classList.remove('drag-over');
+    });
+
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      if (!_dragSrc || _dragSrc === card) return;
+
+      const list = card.parentElement;
+      const cards = [...list.querySelectorAll('.download-card')];
+      const srcIdx = cards.indexOf(_dragSrc);
+      const dstIdx = cards.indexOf(card);
+
+      if (srcIdx < dstIdx) {
+        list.insertBefore(_dragSrc, card.nextSibling);
+      } else {
+        list.insertBefore(_dragSrc, card);
+      }
+      flashCard(_dragSrc);
+      syncTaskOrder();
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SEQUENTIAL DOWNLOAD ─ Settings wiring
+  // ═══════════════════════════════════════════════════════
+  // Sequential download is handled by watching the toggle in settings.
+  // When enabled: concurrent_downloads is set to 1 on save.
+  // When disabled: restored to whatever the user had before.
+  // This is a UI-level preference that maps to concurrent_downloads=1.
+
+  // ═══════════════════════════════════════════════════════
+  // CONVERTER PAGE
+  // ═══════════════════════════════════════════════════════
+  const CONVERTER_FORMATS = {
+    // video inputs → possible outputs
+    video: ['mp4', 'mkv', 'avi', 'mov', 'webm', 'gif'],
+    // audio inputs → possible outputs
+    audio: ['mp3', 'aac', 'flac', 'wav', 'ogg', 'm4a'],
+    // image inputs → possible outputs
+    image: ['jpg', 'png', 'webp', 'gif', 'bmp'],
+  };
+
+  const VIDEO_EXTS = new Set(['mp4','mkv','avi','mov','webm','flv','wmv','m4v','ts','mts','m2ts','vob','3gp','ogv']);
+  const AUDIO_EXTS = new Set(['mp3','aac','flac','wav','ogg','m4a','opus','wma','aiff','alac']);
+  const IMAGE_EXTS = new Set(['jpg','jpeg','png','webp','gif','bmp','tiff','tga','ico']);
+
+  let converterState = {
+    srcFile: null,
+    srcExt: '',
+    srcType: '',
+    srcThumb: '',
+    dstExt: '',
+    jobs: [],
+  };
+  let converterJobId = 0;
+
+  function getFileType(ext) {
+    ext = ext.toLowerCase();
+    if (VIDEO_EXTS.has(ext)) return 'video';
+    if (AUDIO_EXTS.has(ext)) return 'audio';
+    if (IMAGE_EXTS.has(ext)) return 'image';
+    return 'video';
+  }
+
+  function initConverterPage() {
+    const pickBtn = $('#btn-converter-pick');
+    const fileInput = $('#converter-file-input');
+    const addBtn = $('#btn-converter-add');
+    const dstBtn = $('#converter-dst-ext-btn');
+    const dropdown = $('#converter-format-dropdown');
+    const srcExtLabel = $('#converter-src-ext-label');
+    const dstExtLabel = $('#converter-dst-ext-label');
+
+    if (!pickBtn) return;
+
+    pickBtn.addEventListener('click', () => fileInput?.click());
+
+    fileInput?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      converterState.srcFile = file;
+      const ext = file.name.split('.').pop().toLowerCase();
+      converterState.srcExt = ext;
+      converterState.srcType = getFileType(ext);
+      converterState.dstExt = '';
+
+      if (srcExtLabel) srcExtLabel.textContent = ext.toUpperCase();
+      if (dstExtLabel) dstExtLabel.textContent = 'Seç';
+      if (addBtn) addBtn.disabled = true;
+      
+      const iconEl = $('#btn-converter-pick-icon');
+      const textEl = $('#btn-converter-pick-text');
+      const imgEl = $('#btn-converter-pick-img');
+
+      pickBtn.style.borderStyle = 'solid';
+      pickBtn.style.borderColor = 'transparent';
+      
+      if (iconEl) iconEl.style.display = 'none';
+      if (textEl) {
+        textEl.style.display = 'block';
+        textEl.textContent = file.name.length > 10 ? file.name.substring(0,8) + '..' : file.name;
+        textEl.style.position = 'absolute';
+        textEl.style.bottom = '8px';
+        textEl.style.background = 'rgba(0,0,0,0.6)';
+        textEl.style.padding = '2px 6px';
+        textEl.style.borderRadius = '4px';
+        textEl.style.color = '#fff';
+        textEl.style.fontSize = '11px';
+        textEl.style.zIndex = '2';
+      }
+
+      if (imgEl) {
+        imgEl.style.display = 'block';
+        if (converterState.srcType === 'image') {
+          imgEl.src = URL.createObjectURL(file);
+          converterState.srcThumb = imgEl.src;
+        } else if (converterState.srcType === 'video') {
+          try {
+            if (file.name.toLowerCase().endsWith('.ts')) {
+              // Extract from TS using backend
+              const slice = file.slice(0, 5 * 1024 * 1024); // 5MB
+              const reader = new FileReader();
+              reader.onload = async (e) => {
+                try {
+                  const res = await callApi('extract_thumbnail', JSON.stringify({
+                    src_ext: 'ts',
+                    data_url: e.target.result
+                  }));
+                  if (res && res.success && res.thumbnail) {
+                    imgEl.src = res.thumbnail;
+                    converterState.srcThumb = res.thumbnail;
+                  } else {
+                    imgEl.style.display = 'none';
+                  }
+                } catch (err) {
+                  imgEl.style.display = 'none';
+                }
+              };
+              reader.readAsDataURL(slice);
+            } else {
+              const videoUrl = URL.createObjectURL(file);
+              const video = document.createElement('video');
+              video.src = videoUrl;
+              video.muted = true;
+              await new Promise((resolve) => {
+                video.onloadeddata = () => {
+                  video.currentTime = 1;
+                };
+                video.onseeked = () => {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = video.videoWidth;
+                  canvas.height = video.videoHeight;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                  imgEl.src = canvas.toDataURL('image/jpeg');
+                  converterState.srcThumb = imgEl.src;
+                  resolve();
+                };
+                video.onerror = resolve;
+              });
+            }
+          } catch (err) {
+            imgEl.style.display = 'none';
+            converterState.srcThumb = '';
+          }
+        } else {
+          // just show an icon for audio or others
+          imgEl.style.display = 'none';
+          converterState.srcThumb = '';
+          if (iconEl) iconEl.style.display = 'block';
+          textEl.style.position = 'static';
+          textEl.style.background = 'transparent';
+          textEl.style.color = 'var(--accent-cyan)';
+          pickBtn.style.borderStyle = 'dashed';
+          pickBtn.style.borderColor = 'rgba(0,240,255,0.35)';
+        }
+      }
+
+      buildFormatDropdown();
+      fileInput.value = '';
+    });
+
+    // Toggle dropdown
+    dstBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!converterState.srcExt) return;
+      dropdown?.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', () => {
+      dropdown?.classList.add('hidden');
+    });
+
+    addBtn?.addEventListener('click', () => {
+      if (!converterState.srcFile || !converterState.dstExt) return;
+      addConverterJob(converterState.srcFile, converterState.srcExt, converterState.dstExt);
+
+      // Reset UI
+      converterState.srcFile = null;
+      converterState.srcExt = '';
+      converterState.dstExt = '';
+      if (srcExtLabel) srcExtLabel.textContent = '—';
+      if (dstExtLabel) dstExtLabel.textContent = 'Seç';
+      if (addBtn) addBtn.disabled = true;
+      
+      pickBtn.style.backgroundImage = 'none';
+      pickBtn.style.boxShadow = 'none';
+      pickBtn.style.borderStyle = 'dashed';
+      const iconEl = $('#btn-converter-pick-icon');
+      const textEl = $('#btn-converter-pick-text');
+      if (iconEl) iconEl.style.display = 'block';
+      if (textEl) {
+        textEl.style.display = 'block';
+        textEl.textContent = 'Dosya Seç';
+      }
+    });
+  }
+
+  function buildFormatDropdown() {
+    const dropdown = $('#converter-format-dropdown');
+    if (!dropdown) return;
+    dropdown.innerHTML = '';
+
+    const type = converterState.srcType;
+    const formats = CONVERTER_FORMATS[type] || CONVERTER_FORMATS.video;
+    const srcExt = converterState.srcExt.toLowerCase();
+
+    formats.forEach(fmt => {
+      if (fmt === srcExt) return; // skip same format
+      const opt = document.createElement('div');
+      opt.className = 'converter-format-option';
+      opt.textContent = fmt.toUpperCase();
+      if (fmt === converterState.dstExt) opt.classList.add('active');
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        converterState.dstExt = fmt;
+        const dstExtLabel = $('#converter-dst-ext-label');
+        if (dstExtLabel) dstExtLabel.textContent = fmt.toUpperCase();
+        dropdown.classList.add('hidden');
+        // Update active class
+        dropdown.querySelectorAll('.converter-format-option').forEach(el => {
+          el.classList.toggle('active', el.textContent.toLowerCase() === fmt);
+        });
+        const addBtn = $('#btn-converter-add');
+        if (addBtn) addBtn.disabled = false;
+      });
+      dropdown.appendChild(opt);
+    });
+
+    dropdown.classList.remove('hidden');
+  }
+
+  function addConverterJob(file, srcExt, dstExt) {
+    converterJobId++;
+    const id = `conv-${converterJobId}`;
+    const job = {
+      id,
+      file,
+      srcExt,
+      dstExt,
+      name: file.name,
+      status: 'pending',
+      progress: 0,
+      error: '',
+    };
+    converterState.jobs.push(job);
+    renderConverterCard(job);
+    runConverterJob(job);
+  }
+
+  function renderConverterCard(job) {
+    const queue = $('#converter-queue');
+    const empty = $('#converter-queue-empty');
+    if (!queue) return;
+    if (empty) empty.style.display = 'none';
+
+    const card = document.createElement('div');
+    card.className = 'converter-card glass-panel';
+    card.id = `conv-card-${job.id}`;
+    let iconHtml = `<div class="converter-card-icon">${job.srcExt.toUpperCase()}</div>`;
+    if (converterState.srcThumb) {
+      iconHtml = `<div class="converter-card-icon" style="padding:0; overflow:hidden;"><img src="${converterState.srcThumb}" style="width:100%; height:100%; object-fit:cover;"></div>`;
+    }
+
+    card.innerHTML = `
+      ${iconHtml}
+      <div class="converter-card-info">
+        <div class="converter-card-name" title="${escapeHtml(job.name)}">${escapeHtml(job.name)}</div>
+        <div class="converter-card-meta">
+          <span style="color:#c084fc; font-weight:700;">${job.srcExt.toUpperCase()}</span>
+          <span>→</span>
+          <span style="color:var(--accent-cyan); font-weight:700;">${job.dstExt.toUpperCase()}</span>
+        </div>
+      </div>
+      <div class="converter-card-progress">
+        <div class="converter-progress-bar">
+          <div class="converter-progress-fill" style="width:0%"></div>
+        </div>
+        <div class="converter-card-status">Hazırlanıyor...</div>
+      </div>
+      <div class="converter-card-actions">
+        <button class="card-action-btn btn-conv-cancel btn-cancel" title="İptal Et">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+        <button class="card-action-btn btn-conv-remove btn-remove" title="Listeden Kaldır" style="display:none">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        </button>
+      </div>
+    `;
+
+    card.querySelector('.btn-conv-cancel')?.addEventListener('click', () => {
+      job.cancelled = true;
+      updateConverterCard(job.id, 'İptal edildi', 0, 'error');
+    });
+    card.querySelector('.btn-conv-remove')?.addEventListener('click', () => {
+      card.style.transition = 'opacity 0.25s, transform 0.25s';
+      card.style.opacity = '0';
+      card.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        card.remove();
+        converterState.jobs = converterState.jobs.filter(j => j.id !== job.id);
+        if ($('#converter-queue')?.children.length === 0 || $('#converter-queue .converter-card') === null) {
+          const empty = $('#converter-queue-empty');
+          if (empty && !$('#converter-queue .converter-card')) empty.style.display = '';
+        }
+      }, 280);
+    });
+
+    queue.appendChild(card);
+  }
+
+  function updateConverterCard(id, statusText, progress, statusClass) {
+    const card = $(`#conv-card-${id}`);
+    if (!card) return;
+    const fill = card.querySelector('.converter-progress-fill');
+    const statusEl = card.querySelector('.converter-card-status');
+    const cancelBtn = card.querySelector('.btn-conv-cancel');
+    const removeBtn = card.querySelector('.btn-conv-remove');
+
+    if (fill) fill.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+    if (statusEl) statusEl.textContent = statusText;
+
+    card.className = `converter-card glass-panel${statusClass ? ' status-' + statusClass : ''}`;
+    if (statusClass === 'done' || statusClass === 'error') {
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (removeBtn) removeBtn.style.display = '';
+
+      if (statusClass === 'done') {
+        const job = converterState.jobs.find(j => j.id === id);
+        if (job && job.output_file) {
+          const actionWrap = card.querySelector('.converter-card-actions');
+          if (actionWrap && !actionWrap.querySelector('.btn-conv-folder')) {
+            const fBtn = document.createElement('button');
+            fBtn.className = 'card-action-btn btn-conv-folder btn-folder';
+            fBtn.title = 'Dosya Konumunu Aç';
+            fBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`;
+            fBtn.addEventListener('click', () => callApi('open_file_location', job.output_file));
+            actionWrap.insertBefore(fBtn, removeBtn);
+          }
+        }
+      }
+    }
+
+    // Update icon
+    const iconEl = card.querySelector('.converter-card-icon');
+    if (iconEl) {
+      const job = converterState.jobs.find(j => j.id === id);
+      if (job) {
+        if (statusClass === 'done') iconEl.textContent = '✓';
+        else if (statusClass === 'error') iconEl.textContent = '✗';
+        else iconEl.textContent = job.srcExt.toUpperCase();
+      }
+    }
+  }
+
+  async function runConverterJob(job) {
+    if (!job.file) return;
+
+    updateConverterCard(job.id, 'Dönüştürülüyor...', 10, 'converting');
+
+    try {
+      // Read file as base64 to send to backend
+      const reader = new FileReader();
+      const fileDataPromise = new Promise((resolve, reject) => {
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(job.file);
+      });
+
+      const dataUrl = await fileDataPromise;
+      if (job.cancelled) return;
+
+      updateConverterCard(job.id, 'Dosya yükleniyor...', 25, 'converting');
+
+      const result = await callApi('convert_file', JSON.stringify({
+        filename: job.name,
+        src_ext: job.srcExt,
+        dst_ext: job.dstExt,
+        data_url: dataUrl,
+      }));
+
+      if (job.cancelled) return;
+
+      if (result && result.success) {
+        job.output_file = result.output_file;
+        updateConverterCard(job.id, 'Tamamlandı', 100, 'done');
+      } else {
+        const errMsg = result?.error || 'Dönüştürme başarısız';
+        updateConverterCard(job.id, `Hata: ${errMsg}`, 0, 'error');
+      }
+    } catch (err) {
+      if (!job.cancelled) {
+        updateConverterCard(job.id, `Hata: ${err.message || 'Bilinmeyen hata'}`, 0, 'error');
+      }
+    }
+  }
 
 })();

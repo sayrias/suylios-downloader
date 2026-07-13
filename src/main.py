@@ -79,7 +79,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.4.0"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -190,6 +190,10 @@ class Bridge:
     def remove_download(self, task_id: str) -> dict[str, Any]:
         success = self._dm.remove_task(task_id)
         return {"ok": success}
+
+    def reorder_tasks(self, ids: list[str]) -> dict[str, Any]:
+        self._dm.reorder_tasks(ids)
+        return {"ok": True}
 
     def get_downloads(self) -> list[dict[str, Any]]:
         """Return snapshots of every download task."""
@@ -346,6 +350,175 @@ class Bridge:
         except Exception as exc:
             logger.error("open_file_location failed: %s", exc)
             return {"ok": False, "error": str(exc)}
+
+    def convert_file(self, payload_json: str) -> dict[str, Any]:
+        """Convert a media file using FFmpeg.
+        
+        Expects JSON with keys: filename, src_ext, dst_ext, data_url (base64 data URL).
+        The converted file is saved in the Downloads folder.
+        """
+        import base64, json as _json, tempfile, uuid, shutil, time
+        
+        try:
+            payload = _json.loads(payload_json)
+            filename: str = payload.get("filename", "output")
+            src_ext: str = payload.get("src_ext", "").lower()
+            dst_ext: str = payload.get("dst_ext", "").lower()
+            data_url: str = payload.get("data_url", "")
+
+            if not data_url or not dst_ext:
+                return {"success": False, "error": "Eksik parametre: data_url veya dst_ext yok"}
+
+            if "," in data_url:
+                data_url = data_url.split(",", 1)[1]
+            raw_bytes = base64.b64decode(data_url)
+
+            tmp_dir = Path(tempfile.gettempdir()) / "suylios_conv"
+            tmp_dir.mkdir(exist_ok=True)
+            uid = uuid.uuid4().hex[:8]
+            src_path = tmp_dir / f"{uid}_input.{src_ext}"
+            src_path.write_bytes(raw_bytes)
+
+            dl_dir = Path(config.get_download_dir())
+            base_name = Path(filename).stem
+            out_filename = f"{base_name}_converted.{dst_ext}"
+            out_path = dl_dir / out_filename
+            
+            counter = 1
+            while out_path.exists():
+                out_path = dl_dir / f"{base_name}_converted_{counter}.{dst_ext}"
+                counter += 1
+
+            ffmpeg_path = config.get("ffmpeg_path", "")
+            if not ffmpeg_path or not Path(ffmpeg_path).is_file():
+                portable_ffmpeg = Path(__file__).resolve().parent.parent / "bin" / "ffmpeg.exe"
+                if portable_ffmpeg.is_file():
+                    ffmpeg_path = str(portable_ffmpeg)
+                else:
+                    ffmpeg_path = "ffmpeg"
+
+            cmd = [ffmpeg_path, "-y", "-i", str(src_path)]
+
+            dst_lower = dst_ext.lower()
+            if dst_lower == "mp3":
+                cmd += ["-vn", "-acodec", "libmp3lame", "-q:a", "2"]
+            elif dst_lower == "aac":
+                cmd += ["-vn", "-acodec", "aac", "-b:a", "256k"]
+            elif dst_lower == "flac":
+                cmd += ["-vn", "-acodec", "flac"]
+            elif dst_lower == "wav":
+                cmd += ["-vn", "-acodec", "pcm_s16le"]
+            elif dst_lower == "ogg":
+                cmd += ["-vn", "-acodec", "libvorbis", "-q:a", "5"]
+            elif dst_lower == "m4a":
+                cmd += ["-vn", "-acodec", "aac", "-b:a", "256k"]
+            elif dst_lower == "gif":
+                cmd += ["-vf", "fps=15,scale=480:-1:flags=lanczos", "-loop", "0"]
+            elif dst_lower in ("jpg", "jpeg", "png", "webp", "bmp"):
+                cmd += ["-vf", "scale=iw:ih", "-frames:v", "1"]
+            elif dst_lower == "webm":
+                cmd += ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus"]
+            elif dst_lower == "mkv":
+                cmd += ["-c:v", "copy", "-c:a", "copy"]
+            elif dst_lower == "avi":
+                cmd += ["-c:v", "libx264", "-c:a", "mp3"]
+            elif dst_lower == "mov":
+                cmd += ["-c:v", "libx264", "-c:a", "aac"]
+            else:
+                cmd += ["-c", "copy"]
+
+            cmd.append(str(out_path))
+
+            logger.info("FFmpeg convert: %s", " ".join(str(c) for c in cmd))
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+
+            try:
+                src_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            if result.returncode != 0:
+                err_out = (result.stderr or result.stdout or "")[-600:]
+                logger.error("FFmpeg error: %s", err_out)
+                return {"success": False, "error": f"FFmpeg hatası: {err_out}"}
+
+            return {
+                "success": True,
+                "output_file": str(out_path),
+                "output_filename": out_path.name,
+            }
+
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Dönüştürme zaman aşımına uğradı (>10 dk)"}
+        except Exception as exc:
+            logger.error("convert_file error: %s", exc, exc_info=True)
+            return {"success": False, "error": str(exc)}
+
+    def extract_thumbnail(self, data: str) -> dict[str, Any]:
+        """Extract a thumbnail from a partial video file."""
+        import base64, json as _json, tempfile, uuid
+        try:
+            req = _json.loads(data)
+            src_ext = req.get("src_ext", "ts").lower()
+            data_url = req.get("data_url", "")
+            
+            if not data_url.startswith("data:"):
+                return {"success": False, "error": "Invalid data format"}
+                
+            header, encoded = data_url.split(",", 1)
+            file_data = base64.b64decode(encoded)
+            
+            tmp_dir = Path(tempfile.gettempdir()) / "suylios_conv"
+            tmp_dir.mkdir(exist_ok=True)
+            uid = uuid.uuid4().hex[:8]
+            
+            in_file = tmp_dir / f"thumb_in_{uid}.{src_ext}"
+            in_file.write_bytes(file_data)
+            
+            out_file = tmp_dir / f"thumb_out_{uid}.jpg"
+            
+            portable_ffmpeg = Path(__file__).resolve().parent.parent / "bin" / "ffmpeg.exe"
+            ffmpeg_path = str(portable_ffmpeg) if portable_ffmpeg.is_file() else config.get("ffmpeg_path", "ffmpeg")
+            
+            cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i", str(in_file),
+                "-vframes", "1",
+                "-q:v", "2",
+                "-vf", "scale=-1:150",
+                str(out_file)
+            ]
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            process.communicate(timeout=10)
+            
+            try:
+                in_file.unlink(missing_ok=True)
+            except:
+                pass
+                
+            if out_file.exists():
+                img_data = out_file.read_bytes()
+                b64 = base64.b64encode(img_data).decode("utf-8")
+                out_file.unlink(missing_ok=True)
+                return {"success": True, "thumbnail": f"data:image/jpeg;base64,{b64}"}
+            else:
+                return {"success": False, "error": "No frame extracted"}
+        except Exception as e:
+            logger.error("extract_thumbnail error: %s", e)
+            return {"success": False, "error": str(e)}
 
     def open_url(self, url: Any) -> dict[str, Any]:
         """Open an external URL in the system's default web browser."""

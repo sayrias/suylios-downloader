@@ -233,28 +233,17 @@ class DownloadManager:
 
     def __init__(self) -> None:
         self._tasks: dict[str, DownloadTask] = {}
+        self._ordered_ids: list[str] = []
         self._lock = threading.RLock()
-        cfg_workers = config.get("max_concurrent", 3)
-        max_workers = 1000 if cfg_workers <= 0 else cfg_workers
         self._pool = ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix="dl",
+            max_workers=1000, thread_name_prefix="dl",
         )
-        logger.info(
-            "DownloadManager initialised (cfg_concurrent=%s, pool_workers=%d).",
-            cfg_workers, max_workers,
-        )
+        logger.info("DownloadManager initialised (pool_workers=1000).")
 
     def update_max_concurrent(self, new_concurrent: int) -> None:
         """Update the max concurrent downloads pool dynamically."""
         with self._lock:
-            max_workers = 1000 if new_concurrent <= 0 else new_concurrent
-            logger.info("Updating DownloadManager pool to max_workers=%d", max_workers)
-            old_pool = self._pool
-            self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="dl")
-            # Old pool will continue running existing active tasks until completion
-            old_pool.shutdown(wait=False)
-
-    # ------------------------------------------------------------------
+            logger.info("Updating DownloadManager max concurrent preference to %d", new_concurrent)
     # Public API
     # ------------------------------------------------------------------
 
@@ -295,14 +284,51 @@ class DownloadManager:
             task.status = TaskStatus.QUEUED
             with self._lock:
                 self._tasks[task.id] = task
+                self._ordered_ids.append(task.id)
             self._pool.submit(self._fetch_scheduled_metadata, task)
             logger.info("Task %s scheduled for %s: %s", task.id, scheduled_at, url)
         else:
             with self._lock:
                 self._tasks[task.id] = task
+                self._ordered_ids.append(task.id)
             self._pool.submit(self._run_task, task)
             logger.info("Task %s queued: %s (fmt=%s, q=%s)", task.id, url, format_type, quality)
         return task
+
+    def reorder_tasks(self, ids: list[str]) -> None:
+        with self._lock:
+            # Sadece mevcut task ID'lerini dikkate al (silinmiş olanlar vs. ayıklanır)
+            valid_ids = [i for i in ids if i in self._tasks]
+            # Liste tam uyuşuyorsa UI ile senkronize et
+            self._ordered_ids = valid_ids
+            logger.info("Tasks reordered according to UI. Ordered count: %d", len(valid_ids))
+
+            seq_mode = config.get("sequential_download")
+            limit = config.get("concurrent_downloads")
+            if seq_mode or limit == 1:
+                # Find the top pending/active task
+                top_task_id = None
+                for tid in self._ordered_ids:
+                    t = self._tasks.get(tid)
+                    if t and t.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.PAUSED):
+                        top_task_id = tid
+                        break
+                
+                if top_task_id:
+                    for other_tid, other_t in self._tasks.items():
+                        if other_tid != top_task_id and getattr(other_t, "_is_actually_downloading", False) and other_t.status == TaskStatus.DOWNLOADING:
+                            other_t._pause_event.clear()
+                            other_t.status = TaskStatus.PAUSED
+                            other_t._is_actually_downloading = False
+                            logger.info("Sequential mode reorder: paused lower priority task %s", other_tid)
+                    
+                    top_t = self._tasks[top_task_id]
+                    if top_t.status == TaskStatus.PAUSED:
+                        top_t.status = TaskStatus.DOWNLOADING
+                        top_t._is_actually_downloading = True
+                        top_t._pause_event.set()
+                        logger.info("Sequential mode reorder: resumed top priority task %s", top_task_id)
+
 
     def add_batch_tasks(
         self,
@@ -398,13 +424,23 @@ class DownloadManager:
                 task._cancel_event.set()
                 task._pause_event.set()
                 del self._tasks[task_id]
+                if task_id in self._ordered_ids:
+                    self._ordered_ids.remove(task_id)
                 return True
         return False
 
     def get_all_tasks(self) -> list[dict[str, Any]]:
         """Return a JSON-serialisable list of all task snapshots."""
         with self._lock:
-            return [t.to_dict() for t in self._tasks.values()]
+            result = []
+            for tid in self._ordered_ids:
+                if tid in self._tasks:
+                    result.append(self._tasks[tid].to_dict())
+            # Fallback for any tasks not in _ordered_ids
+            for tid, t in self._tasks.items():
+                if tid not in self._ordered_ids:
+                    result.append(t.to_dict())
+            return result
 
     def get_task(self, task_id: str) -> Optional[dict[str, Any]]:
         """Return a single task snapshot, or ``None``."""
@@ -691,6 +727,51 @@ class DownloadManager:
                     logger.warning("Task %s – progress hook error: %s", task.id, hook_exc)
 
             try:
+                # 4a. Wait for download slot (Sequential Download support)
+                import time
+                task.status = TaskStatus.QUEUED
+                task._metadata_fetched = True
+                while True:
+                    if task._cancel_event.is_set():
+                        raise _CancelledError()
+                    
+                    with self._lock:
+                        concurrent_limit = config.get("concurrent_downloads")
+                        if concurrent_limit is None:
+                            concurrent_limit = config.get("max_concurrent", 3)
+                            
+                        if concurrent_limit <= 0:
+                            # Unlimited
+                            task._is_actually_downloading = True
+                            task.status = TaskStatus.DOWNLOADING
+                            break
+                        
+                        # Count ONLY tasks that are truly actively downloading/converting
+                        active = sum(
+                            1 for t in self._tasks.values() 
+                            if getattr(t, "_is_actually_downloading", False) 
+                            and t.status in (TaskStatus.DOWNLOADING, TaskStatus.CONVERTING)
+                        )
+                        
+                        if active < concurrent_limit:
+                            # Am I the next in line?
+                            # Look at ALL tasks not yet actively downloading, in ordered position
+                            waiting_ids = [
+                                tid for tid in self._ordered_ids
+                                if tid in self._tasks 
+                                and self._tasks[tid].status == TaskStatus.QUEUED 
+                                and not getattr(self._tasks[tid], "_is_actually_downloading", False)
+                            ]
+                            # Also include tasks not in ordered_ids yet
+                            if task.id not in self._ordered_ids:
+                                waiting_ids.insert(0, task.id)
+                            
+                            if not waiting_ids or waiting_ids[0] == task.id:
+                                task._is_actually_downloading = True
+                                task.status = TaskStatus.DOWNLOADING
+                                break
+                    time.sleep(0.3)
+
                 try:
                     result_path = extractor.download(
                         url=task.url,

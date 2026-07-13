@@ -95,9 +95,21 @@ Easily switch between Video and Audio modes. Suylios utilizes its isolated, embe
 
 <br/>
 
+### 🎬 Dedicated Video & Media Converter
+Not just a downloader! Suylios now features a standalone **Media Converter** page. Convert any local video, audio, or image file on your PC instantly with the embedded FFmpeg engine. Select your file, pick the target format (MP4, MKV, MP3, WAV, GIF, WEBP, etc.), and process it through our elegant glassmorphism conversion queue.
+
+<br/>
+
 ### 📜 Rich Media Download History & Mini Media Player
 Keep track of your digital library with a redesigned, visually stunning **History Page**. Completed downloads are saved as persistent cards displaying preview thumbnails, format tags (`MP3`, `MP4`, `FLAC`), quality badges (`1080p`, `4K`), exact file sizes, and timestamps.
 * **Mini Media Player & Playlist Support:** Play audio and video directly within the app! Enjoy full album and multi-file playlist playback with **Next (⏭️)** and **Previous (⏮️)** track switching controls.
+
+<br/>
+
+### 🔄 Interactive Queue & Sequential Downloading
+Take full control of your download workflow:
+* **Drag-and-Drop Reordering:** Easily prioritize your active downloads by dragging them up or down the queue, or use the quick hover arrows.
+* **Sequential Download Mode:** Activate `Sıralı İndirme` (Sequential Mode) to ensure files are downloaded and processed strictly one-by-one, maximizing bandwidth stability and preventing disk fragmentation.
 
 <br/>
 
