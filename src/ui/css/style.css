@@ -89,10 +89,7 @@ html, body {
 body {
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(ellipse 80% 50% at 20% 80%, rgba(0, 240, 255, 0.03) 0%, transparent 50%),
-    radial-gradient(ellipse 60% 40% at 80% 20%, rgba(180, 74, 255, 0.03) 0%, transparent 50%),
-    var(--bg-primary);
+  background: var(--bg-primary);
 }
 
 /* Background animated noise/grid */
@@ -1837,13 +1834,13 @@ body[data-theme="sunset"] {
   background: var(--bg-input);
   border: 2px solid var(--border-subtle);
   cursor: pointer;
-  transition: all 0.25s var(--transition-spring);
+  transition: transform 0.12s ease-out, border-color 0.12s ease-out, box-shadow 0.12s ease-out, background-color 0.12s ease-out !important;
 }
 
 .theme-card:hover {
-  border-color: var(--border-light);
-  transform: translateY(-3px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  border-color: var(--border-accent, rgba(0, 240, 255, 0.4));
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
 .theme-card.active {
@@ -1861,7 +1858,11 @@ body[data-theme="sunset"] {
   background-size: cover;
   background-position: top center;
   background-repeat: no-repeat;
-  transition: all 0.3s ease;
+  transition: transform 0.15s ease;
+}
+
+.theme-card:hover .theme-preview {
+  transform: scale(1.02);
 }
 
 .cyber-bg  { background-image: url('../assets/themes/suylios.png'), linear-gradient(135deg, #0a0a0f 20%, #00f0ff 100%); }
@@ -1871,39 +1872,106 @@ body[data-theme="sunset"] {
 .blood-bg  { background-image: url('../assets/themes/crimson.png'), linear-gradient(135deg, #160a0e 20%, #ff2a6d 100%); }
 .sunset-bg { background-image: url('../assets/themes/gold.png'), linear-gradient(135deg, #181022 20%, #ff9e00 100%); }
 
+.theme-editor-input,
+.theme-editor-select {
+  width: 100%;
+  background: var(--bg-input, #121218);
+  color: var(--text-primary, #ffffff);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.15));
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  outline: none;
+}
+
+.theme-editor-select option {
+  background-color: var(--bg-card, #1e1e24);
+  color: var(--text-primary, #ffffff);
+  padding: 10px;
+}
+
+.theme-editor-input:focus,
+.theme-editor-select:focus {
+  border-color: var(--accent-cyan, #00f0ff);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.15);
+}
+
+.theme-color-box {
+  background: var(--bg-input, rgba(255,255,255,0.02));
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 12px;
+  padding: 10px 14px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.theme-color-box:hover {
+  border-color: var(--border-light, rgba(255,255,255,0.15));
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.btn-edit-theme {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 5;
+}
+.btn-edit-theme:hover {
+  background: var(--accent-cyan, #00f0ff);
+  border-color: var(--accent-cyan, #00f0ff);
+  color: #000000;
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 6px 16px rgba(0, 240, 255, 0.4);
+}
+
 .theme-color-picker {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   background-color: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
 }
 .theme-color-picker::-webkit-color-swatch-wrapper {
   padding: 0;
 }
 .theme-color-picker::-webkit-color-swatch {
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
 }
 .theme-color-picker::-moz-color-swatch {
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  border: 1.5px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
 }
 
 .theme-name {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-primary);
   text-align: center;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
 /* ======================================================================
@@ -2440,18 +2508,36 @@ body[data-theme="basit-beyaz"] .modal-close-btn:hover {
 body[data-theme="basit-beyaz"] #batch-urls,
 body[data-theme="basit-beyaz"] #schedule-url,
 body[data-theme="basit-beyaz"] #schedule-time,
-body[data-theme="basit-beyaz"] .trim-input {
+body[data-theme="basit-beyaz"] .trim-input,
+body[data-theme="basit-beyaz"] .theme-editor-input,
+body[data-theme="basit-beyaz"] .theme-editor-select {
   background: #f8fafc !important;
   border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+body[data-theme="basit-beyaz"] .theme-editor-select option {
+  background-color: #ffffff !important;
   color: #0f172a !important;
 }
 body[data-theme="basit-beyaz"] #batch-urls:focus,
 body[data-theme="basit-beyaz"] #schedule-url:focus,
 body[data-theme="basit-beyaz"] #schedule-time:focus,
-body[data-theme="basit-beyaz"] .trim-input:focus {
+body[data-theme="basit-beyaz"] .trim-input:focus,
+body[data-theme="basit-beyaz"] .theme-editor-input:focus,
+body[data-theme="basit-beyaz"] .theme-editor-select:focus {
   border-color: #0066ff !important;
   box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.15) !important;
   background: #ffffff !important;
+}
+body[data-theme="basit-beyaz"] .theme-color-box {
+  background: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+}
+body[data-theme="basit-beyaz"] .theme-color-box label {
+  color: #475569 !important;
+}
+body[data-theme="basit-beyaz"] .theme-color-box span {
+  color: #0f172a !important;
 }
 body[data-theme="basit-beyaz"] #batch-modal .modal-body > div[style*="background:rgba(0,0,0,0.15)"],
 body[data-theme="basit-beyaz"] .trim-row {

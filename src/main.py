@@ -7,6 +7,7 @@ API that exposes download management, settings, and OS interaction.
 
 import json
 import logging
+import logging.handlers
 import os
 import subprocess
 import sys
@@ -65,21 +66,99 @@ if os.name == "nt":
 # Logging setup
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+def _setup_logging() -> Path | None:
+    """Configure file + console logging.
+
+    Log location:
+    - Portable mode  → <app_dir>/logs/<YYYY-MM-DD>/<YYYY-MM-DD>.log
+    - Installed/EXE  → %LOCALAPPDATA%/Programs/Suylios Downloader/logs/<date>/<date>.log
+    - Development    → <project_root>/logs/<date>/<date>.log
+
+    Returns the Path of the log file (or None on failure).
+    """
+    from datetime import date as _date
+
+    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    date_str = _date.today().strftime("%Y-%m-%d")
+
+    # Determine log root directory
+    log_root: Path | None = None
+    try:
+        is_frozen = getattr(sys, "frozen", False)
+        exe_dir = Path(sys.executable).resolve().parent if is_frozen else Path(__file__).resolve().parent.parent
+
+        portable_flag = exe_dir / "portable.flag"
+        setup_flag = exe_dir / "installed_by_setup.flag"
+        in_program_files = "program files" in str(exe_dir).lower()
+
+        if portable_flag.exists() and not setup_flag.exists() and not in_program_files:
+            # Portable: logs next to the exe
+            log_root = exe_dir / "logs"
+        elif is_frozen:
+            # Installed: use LOCALAPPDATA/Programs/Suylios Downloader
+            local = os.environ.get("LOCALAPPDATA", "")
+            if local:
+                log_root = Path(local) / "Programs" / "Suylios Downloader" / "logs"
+        else:
+            # Development
+            log_root = Path(__file__).resolve().parent.parent / "logs"
+    except Exception:
+        pass
+
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+
+    log_file: Path | None = None
+    if log_root:
+        try:
+            day_dir = log_root / date_str
+            day_dir.mkdir(parents=True, exist_ok=True)
+            log_file = day_dir / f"{date_str}.log"
+            fh = logging.handlers.RotatingFileHandler(
+                str(log_file),
+                maxBytes=10 * 1024 * 1024,   # 10 MB
+                backupCount=5,
+                encoding="utf-8",
+                errors="replace",
+            )
+            fh.setFormatter(logging.Formatter(fmt))
+            fh.setLevel(logging.DEBUG)
+            handlers.append(fh)
+
+            # Clean up logs older than 30 days
+            try:
+                import time as _time
+                cutoff = _time.time() - 30 * 86400
+                for day_folder in log_root.iterdir():
+                    if day_folder.is_dir():
+                        try:
+                            if day_folder.stat().st_mtime < cutoff:
+                                import shutil as _shutil
+                                _shutil.rmtree(str(day_folder), ignore_errors=True)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        except Exception as _log_err:
+            print(f"[UYARI] Log dosyası oluşturulamadı: {_log_err}")
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format=fmt,
+        handlers=handlers,
+    )
+    return log_file
+
+
+_log_file_path = _setup_logging()
 logger = logging.getLogger("suylios")
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -191,6 +270,11 @@ class Bridge:
         success = self._dm.remove_task(task_id)
         return {"ok": success}
 
+    def retry_download(self, task_id: str) -> dict[str, Any]:
+        """Re-queue a completed, errored, or cancelled task for another download attempt."""
+        success = self._dm.retry_task(task_id)
+        return {"ok": success}
+
     def reorder_tasks(self, ids: list[str]) -> dict[str, Any]:
         self._dm.reorder_tasks(ids)
         return {"ok": True}
@@ -252,7 +336,13 @@ class Bridge:
         d = config.as_dict()
         d["download_path"] = d.get("download_dir", "")
         d["subfolders"] = d.get("create_subfolders", True)
-        d["concurrent_downloads"] = d.get("max_concurrent", 3)
+        conc = d.get("max_concurrent", d.get("concurrent_downloads", 3))
+        if conc is None or int(conc) <= 0:
+            conc = 3
+        d["concurrent_downloads"] = int(conc)
+        d["sequential_download"] = bool(d.get("sequential_download", False))
+        if d["sequential_download"]:
+            d["concurrent_downloads"] = 1
         d["start_minimized"] = d.get("start_minimized", False)
         d["auto_start_windows"] = d.get("auto_start_windows", False)
         d["theme"] = d.get("theme", "basit-beyaz")
@@ -679,7 +769,7 @@ class Bridge:
 
     def close_window(self) -> dict[str, Any]:
         """Intercept window close request from UI."""
-        background_mode = config.get("background_mode", True)
+        background_mode = config.get("background_mode", False)
         active = self._dm.get_active_count()
         scheduled = sum(1 for t in self._dm.get_all_tasks() if t.get("scheduled_at", 0) > 0)
 
@@ -1327,6 +1417,8 @@ def main() -> None:
     logger.info("Portable mode: %s", config.is_portable())
     logger.info("Download directory: %s", config.get_download_dir())
     logger.info("FFmpeg path: %s", config.get_ffmpeg_path())
+    if _log_file_path:
+        logger.info("Log file: %s", _log_file_path)
 
     bridge = Bridge()
     ui_path = _resolve_ui_path()
@@ -1359,7 +1451,7 @@ def main() -> None:
         frameless=True,
         easy_drag=False,
         text_select=False,
-        hidden=False,
+        hidden=True,
     )
     bridge.set_window(window)
     _ensure_single_instance(bridge_holder=bridge)
@@ -1368,14 +1460,20 @@ def main() -> None:
         try:
             if config.get("start_minimized", False):
                 window.minimize()
+                window.show()
             else:
                 x, y, work_w, work_h = bridge._get_work_area()
                 win_w, win_h = 1200, 800
                 cx = x + max(0, (work_w - win_w) // 2)
                 cy = y + max(0, (work_h - win_h) // 2)
                 window.move(cx, cy)
+                window.show()
         except Exception as exc:
             logger.error("Window initial placement error: %s", exc)
+            try:
+                window.show()
+            except Exception:
+                pass
 
     window.events.loaded += _on_ready  # type: ignore[attr-defined]
 
@@ -1385,7 +1483,7 @@ def main() -> None:
             bridge.shutdown()
             return True  # Actually close
 
-        background_mode = config.get("background_mode", True)
+        background_mode = config.get("background_mode", False)
         active = bridge._dm.get_active_count()
         scheduled = sum(1 for t in bridge._dm.get_all_tasks() if t.get("scheduled_at", 0) > 0)
 

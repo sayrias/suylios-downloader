@@ -23,8 +23,14 @@ from typing import Any, Callable, Optional
 
 from src.config import config
 from src.extractors.base_extractor import ExtractionCancelled
+from src.extractors.gallery_ext import kill_all_gallery_dl_procs, kill_procs_for_task, _ACTIVE_PROCS, _ACTIVE_PROCS_LOCK
 
 logger = logging.getLogger(__name__)
+
+
+def _kill_proc_for_task(task_id: str) -> None:
+    """Immediately kill any active subprocesses (gallery-dl, cyberdrop-dl, ffmpeg) for a specific task."""
+    kill_procs_for_task(task_id)
 
 
 def format_user_error(err: Any) -> str:
@@ -32,6 +38,18 @@ def format_user_error(err: Any) -> str:
     s = str(err)
     if "💡 Çözüm Bilgisi:" in s:
         return s[:600]
+    # gallery-dl specific errors
+    if "gallery-dl bu linke erişirken 403" in s or "gallery-dl indirme yaparken 403" in s:
+        return s[:600]
+    if "gallery-dl bu linkten hiçbir içerik" in s or "gallery-dl cannot handle" in s:
+        return "⚠️ Bu URL gallery-dl tarafından desteklenmiyor veya içerik erişilemiyor durumda."
+    if "gallery-dl download failed" in s:
+        inner = s.replace("gallery-dl download failed: ", "").strip()
+        if inner:
+            return f"⚠️ İndirme hatası: {inner[:200]}"
+        return "⚠️ gallery-dl indirme sırasında beklenmedik bir hata oluştu."
+    if "SyntaxError" in s or "expected 'except' or 'finally'" in s:
+        return "⚠️ Dahili bir uygulama hatası oluştu. Lütfen uygulamayı yeniden başlatın."
     if "Unsupported URL" in s or "No extractor found" in s or "No video formats found" in s:
         return "⚠️ Bu URL desteklenmiyor veya geçerli bir medya/arşiv linki değil."
     if "error-rateLimit" in s or "HTTP Error 429" in s or "Too Many Requests" in s or "rate limit" in s.lower():
@@ -76,7 +94,10 @@ def format_user_error(err: Any) -> str:
     ]:
         if s.startswith(prefix):
             s = s[len(prefix):]
-    return s[:200]
+    # If still only generic/cryptic message, wrap it nicely
+    if len(s) < 5 or s in ("None", "False", "True"):
+        return "⚠️ Bilinmeyen bir hata oluştu. Lütfen tekrar deneyin."
+    return s[:300]
 
 
 # ======================================================================
@@ -413,6 +434,8 @@ class DownloadManager:
             task._pause_event.set()          # unblock if paused
             task.status = TaskStatus.CANCELLED
             logger.info("Task %s cancelled.", task_id)
+            # Also immediately kill the gallery-dl subprocess if one is running
+            _kill_proc_for_task(task_id)
             return True
         return False
 
@@ -426,8 +449,36 @@ class DownloadManager:
                 del self._tasks[task_id]
                 if task_id in self._ordered_ids:
                     self._ordered_ids.remove(task_id)
-                return True
-        return False
+        # Kill subprocess outside lock to avoid deadlock
+        _kill_proc_for_task(task_id)
+        return True
+
+    def retry_task(self, task_id: str) -> bool:
+        """Reset a completed/error/cancelled task and re-queue it for download."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            # Don't re-queue a task that is already running
+            if task.status in (TaskStatus.DOWNLOADING, TaskStatus.CONVERTING):
+                return False
+            # Reset task state
+            task.status = TaskStatus.QUEUED
+            task.progress = 0.0
+            task.speed = 0.0
+            task.total_size = 0
+            task.downloaded_size = 0
+            task.eta = 0
+            task.item_index = 0
+            task.item_count = 0
+            task.error_message = ""
+            task.filename = ""
+            task._cancel_event.clear()
+            task._pause_event.set()  # ensure unpaused
+            task._is_actually_downloading = False
+        self._pool.submit(self._run_task, task)
+        logger.info("Task %s re-queued for retry.", task_id)
+        return True
 
     def get_all_tasks(self) -> list[dict[str, Any]]:
         """Return a JSON-serialisable list of all task snapshots."""
@@ -458,6 +509,8 @@ class DownloadManager:
                     task._cancel_event.set()
                     task._pause_event.set()
                     task.status = TaskStatus.CANCELLED
+        # Force-kill all gallery-dl subprocesses immediately
+        kill_all_gallery_dl_procs()
         self._pool.shutdown(wait=False, cancel_futures=True)
         logger.info("DownloadManager shut down.")
 
@@ -570,6 +623,10 @@ class DownloadManager:
                 task.thumbnail = info.get("thumbnail") or ""
                 # Keep a copy of the playlist/archive title so we can restore it on finish
                 task.archive_title = task.title
+                # Store initial item count from metadata if available
+                meta_item_count = info.get("item_count") or 0
+                if meta_item_count and meta_item_count > 1:
+                    task.item_count = int(meta_item_count)
                 logger.info("Task %s – metadata OK: %s", task.id, repr(task.title)[:80])
             except Exception as exc:
                 task.status = TaskStatus.ERROR
@@ -588,7 +645,7 @@ class DownloadManager:
                     url_lower = task.url.lower()
                     site_key = None
                     default_folder = None
-                    
+
                     # 1. Check Custom Sites FIRST
                     custom_sites = config.get("custom_sites", [])
                     if custom_sites:
@@ -633,6 +690,9 @@ class DownloadManager:
                         elif "reddit" in url_lower:
                             site_key = "reddit"
                             default_folder = "Reddit"
+                        elif any(x in url_lower for x in ("simpcity.cr", "simpcity.su", "simpcity.")):
+                            site_key = "simpcity"
+                            default_folder = "SimpCityForums"
                         elif "pornhub" in url_lower:
                             site_key = "pornhub"
                             default_folder = "Pornhub"
@@ -659,7 +719,14 @@ class DownloadManager:
                     folder_name = site_cfg.get("folder") or default_folder
                     dl_dir = str(Path(dl_dir) / folder_name)
 
-                    # Create subfolder for playlists and galleries
+                    # Create per-download subfolder for playlists and galleries.
+                    # This is CRITICAL for concurrent downloads: each task must have
+                    # its own unique directory so files don't get mixed together.
+                    is_gallery_or_forum = (
+                        any(x in url_lower for x in ("simpcity.cr", "simpcity.su", "simpcity."))
+                        or info.get("is_playlist") is True
+                        or site_key in ("simpcity",)
+                    )
                     is_playlist_or_archive = (
                         (site_key == "youtube" and (
                             "list=" in url_lower or "playlist" in url_lower
@@ -669,17 +736,22 @@ class DownloadManager:
                             or info.get("entries") is not None
                         ))
                         or info.get("is_playlist") is True
-                        or site_key == "simpcity_cr"
+                        or is_gallery_or_forum
                     )
                     if is_playlist_or_archive and task.title:
-                        safe_title = re.sub(r'[\\/*?:"<>|]', "", str(task.title)).strip()
+                        safe_title = re.sub(r'[\\/*?"<>|]', "", str(task.title)).strip()
                         if safe_title:
                             dl_dir = str(Path(dl_dir) / safe_title[:100])
 
+                # Store dl_dir on the task object so it doesn't change between
+                # the calculation here and the actual download call below.
+                # This prevents concurrent tasks from sharing the same directory.
+                task._dl_dir = dl_dir
                 Path(dl_dir).mkdir(parents=True, exist_ok=True)
             except Exception as path_exc:
                 logger.error("Task %s – failed creating output dir %s: %s", task.id, dl_dir, path_exc)
                 dl_dir = config.get_download_dir()
+                task._dl_dir = dl_dir
                 Path(dl_dir).mkdir(parents=True, exist_ok=True)
 
             logger.info("Task %s – downloading to: %s (fmt=%s, q=%s)", task.id, dl_dir, task.format_type, task.quality)
@@ -695,9 +767,14 @@ class DownloadManager:
 
                     idx = data.get("item_index") or data.get("playlist_index") or 0
                     cnt = data.get("item_count") or data.get("n_entries") or data.get("playlist_count") or 0
+                    # item_count == -1 means unknown total (gallery watcher mode): don't update item_count
                     if idx and cnt and int(cnt) > 1:
                         task.item_index = int(idx)
                         task.item_count = int(cnt)
+                    elif idx and int(cnt) == -1:
+                        # Unknown total: just track how many files were downloaded, don't set item_count
+                        task.item_index = int(idx)
+                        task.item_count = 0  # 0 = hide the X/Y counter chip, show plain count elsewhere
                     if data.get("item_title"):
                         task.title = data["item_title"]
 
@@ -706,19 +783,40 @@ class DownloadManager:
                         task.status = TaskStatus.DOWNLOADING
                         total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
                         downloaded = data.get("downloaded_bytes", 0)
-                        task.total_size = int(total)
-                        task.downloaded_size = int(downloaded)
-                        if total > 0:
-                            task.progress = min(downloaded / total * 100, 100.0)
+                        if total and int(total) > 0:
+                            task.total_size = int(total)
+                        if downloaded and int(downloaded) > 0:
+                            task.downloaded_size = int(downloaded)
+                        if total and downloaded and int(total) > 0 and int(downloaded) > 0:
+                            task.progress = min(int(downloaded) / int(total) * 100, 100.0)
                         elif data.get("fragment_count", 0) > 0:
                             task.progress = min(data.get("fragment_index", 0) / data.get("fragment_count") * 100, 100.0)
-                        task.speed = data.get("speed") or 0.0
-                        task.eta = data.get("eta") or 0
-                        task.filename = data.get("filename", task.filename)
+                        if data.get("speed") is not None and float(data.get("speed", 0)) > 0:
+                            task.speed = float(data["speed"])
+                        if data.get("eta") is not None and int(data.get("eta", 0)) > 0:
+                            task.eta = int(data["eta"])
+                        if data.get("filename"):
+                            task.filename = str(data["filename"])
                     elif status == "converting":
                         task.status = TaskStatus.CONVERTING
                     elif status == "finished":
                         task.filename = data.get("filename", task.filename)
+                        if data.get("file_size"):
+                            task.downloaded_size += int(data["file_size"])
+                        # For gallery/watcher downloads: update item counter and animate progress
+                        if idx:
+                            task.item_index = int(idx)
+                            task.status = TaskStatus.DOWNLOADING
+                            # Update speed from watcher
+                            watcher_speed = data.get("speed") or 0.0
+                            if watcher_speed > 0:
+                                task.speed = watcher_speed
+                            current_progress = task.progress or 0
+                            if task.item_count and task.item_count > 0:
+                                task.progress = min((task.item_index / task.item_count) * 100.0, 99.0)
+                            else:
+                                increment = max((96.0 - current_progress) * 0.28, 5.0)
+                                task.progress = min(current_progress + increment, 96.0)
                     elif status == "error":
                         task.error_message = format_user_error(data.get("error", "Unknown error"))
                 except _CancelledError:
@@ -736,15 +834,15 @@ class DownloadManager:
                         raise _CancelledError()
                     
                     with self._lock:
-                        concurrent_limit = config.get("concurrent_downloads")
-                        if concurrent_limit is None:
-                            concurrent_limit = config.get("max_concurrent", 3)
-                            
-                        if concurrent_limit <= 0:
-                            # Unlimited
-                            task._is_actually_downloading = True
-                            task.status = TaskStatus.DOWNLOADING
-                            break
+                        if bool(config.get("sequential_download", False)):
+                            concurrent_limit = 1
+                        else:
+                            concurrent_limit = config.get("concurrent_downloads")
+                            if concurrent_limit is None or int(concurrent_limit) <= 0:
+                                concurrent_limit = config.get("max_concurrent", 3)
+                            if concurrent_limit is None or int(concurrent_limit) <= 0:
+                                concurrent_limit = 3
+                            concurrent_limit = int(concurrent_limit)
                         
                         # Count ONLY tasks that are truly actively downloading/converting
                         active = sum(
@@ -778,6 +876,8 @@ class DownloadManager:
                         output_path=dl_dir,
                         format_id=task.format_type,
                         progress_hook=_progress_hook,
+                        cancel_event=task._cancel_event,
+                        task_id=task.id,
                         start_time=task.start_time,
                         end_time=task.end_time,
                         embed_metadata=task.embed_metadata,
@@ -818,6 +918,8 @@ class DownloadManager:
                                 output_path=dl_dir,
                                 format_id=task.format_type,
                                 progress_hook=_progress_hook,
+                                cancel_event=task._cancel_event,
+                                task_id=task.id,
                                 start_time=task.start_time,
                                 end_time=task.end_time,
                                 embed_metadata=task.embed_metadata,
@@ -915,6 +1017,7 @@ class DownloadManager:
                     raise Exception("İndirme işlemi bitti ancak hedef klasörde hiçbir dosya oluşturulmadı. İçerik platform tarafından engellenmiş veya gizli olabilir.")
 
                 task.status = TaskStatus.COMPLETED
+                task._is_actually_downloading = False
                 task.progress = 100.0
                 task.filename = result_path or task.filename
 
@@ -1073,34 +1176,44 @@ class DownloadManager:
                             logger.error("Compression archive error: %s", arc_err)
 
                 # On playlist/archive completion: restore the original title and clear item counter
+                # On playlist/archive completion: restore the original title
                 if task.archive_title:
                     task.title = task.archive_title
-                task.item_index = 0   # Clear so UI shows just the archive title
+                    task.item_index = 0   # Clear so UI shows just the archive title
                 logger.info("Task %s completed.", task.id)
                 try:
                     config.add_to_history(task.to_dict())
                 except Exception as hist_err:
                     logger.error("Failed to add to history: %s", hist_err)
-            except _CancelledError:
-                task.status = TaskStatus.CANCELLED
-                logger.info("Task %s cancelled during download.", task.id)
-            except ExtractionCancelled:
-                task.status = TaskStatus.CANCELLED
-                logger.info("Task %s cancelled during download.", task.id)
-            except Exception as exc:
-                if "Cancelled" in exc.__class__.__name__:
+            except (_CancelledError, ExtractionCancelled, BaseException) as exc:
+                # BaseException catches _GDLCancelledError (subclass of BaseException)
+                # as well as our own _CancelledError
+                if isinstance(exc, BaseException) and not isinstance(exc, Exception):
+                    # This is _GDLCancelledError or similar – treat as cancelled
+                    task.status = TaskStatus.CANCELLED
+                    logger.info("Task %s cancelled during download (low-level interrupt).", task.id)
+                elif isinstance(exc, (ExtractionCancelled, _CancelledError)):
                     task.status = TaskStatus.CANCELLED
                     logger.info("Task %s cancelled during download.", task.id)
-                    return
+                elif "Cancelled" in exc.__class__.__name__:
+                    task.status = TaskStatus.CANCELLED
+                    logger.info("Task %s cancelled during download.", task.id)
+                else:
+                    task.status = TaskStatus.ERROR
+                    task.error_message = format_user_error(exc)
+                    logger.error("Task %s – download error: %s", task.id, exc, exc_info=True)
+        except BaseException as fatal_exc:
+            if not isinstance(fatal_exc, Exception):
+                task.status = TaskStatus.CANCELLED
+                logger.info("Task %s cancelled (low-level BaseException).", task.id)
+            else:
                 task.status = TaskStatus.ERROR
-                task.error_message = format_user_error(exc)
-                logger.error("Task %s – download error: %s", task.id, exc, exc_info=True)
-        except Exception as fatal_exc:
-            task.status = TaskStatus.ERROR
-            task.error_message = format_user_error(fatal_exc)
-            logger.critical("Task %s fatal unhandled error: %s", task.id, fatal_exc, exc_info=True)
+                task.error_message = format_user_error(fatal_exc)
+                logger.critical("Task %s fatal unhandled error: %s", task.id, fatal_exc, exc_info=True)
+        finally:
+            task._is_actually_downloading = False
 
 
-class _CancelledError(Exception):
-    """Raised inside progress hooks to interrupt a download."""
+class _CancelledError(BaseException):
+    """Raised inside progress hooks to interrupt a download immediately."""
 

@@ -100,6 +100,113 @@
     }
   }
 
+  // Custom confirm modal helper
+  let confirmActive = false;
+  function customConfirm(arg1, arg2 = 'Onay', arg3 = 'Tamam', arg4 = false) {
+    if (confirmActive || window._confirmActive) return Promise.resolve(false);
+    confirmActive = true;
+    window._confirmActive = true;
+
+    let title = 'Onay';
+    let message = '';
+    let okText = 'Tamam';
+    let isDanger = false;
+
+    if (typeof arg1 === 'string' && typeof arg2 === 'string') {
+      if (arg2.includes('?') || arg2.length > arg1.length) {
+        title = arg1;
+        message = arg2;
+      } else {
+        message = arg1;
+        title = arg2;
+      }
+    } else {
+      message = arg1;
+    }
+
+    if (typeof arg3 === 'boolean' && typeof arg4 === 'string') {
+      isDanger = arg3;
+      okText = arg4;
+    } else if (typeof arg3 === 'string' && typeof arg4 === 'boolean') {
+      okText = arg3;
+      isDanger = arg4;
+    } else if (typeof arg3 === 'boolean') {
+      isDanger = arg3;
+    } else if (typeof arg3 === 'string') {
+      okText = arg3;
+    }
+
+    return new Promise((resolve) => {
+      let modal = document.getElementById('confirm-modal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'confirm-modal';
+        modal.className = 'modal-overlay hidden';
+        modal.style.setProperty('z-index', '99999999', 'important');
+        modal.innerHTML = `
+          <div class="modal-content glass-panel" style="max-width: 400px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 20px 50px rgba(0,0,0,0.8);">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; margin-bottom: 12px;">
+              <h3 id="confirm-title" style="font-size: 16px; font-weight: 600; color: var(--text-primary);">Onay</h3>
+              <button id="btn-close-confirm" class="modal-close-btn">✕</button>
+            </div>
+            <div class="modal-body" style="padding: 10px 0 16px 0;">
+              <p id="confirm-message" style="font-size: 14px; color: var(--text-secondary); line-height: 1.5;"></p>
+            </div>
+            <div class="modal-footer" style="gap: 12px; display: flex; justify-content: flex-end;">
+              <button id="btn-confirm-cancel" class="btn-secondary" style="padding: 8px 16px;">İptal</button>
+              <button id="btn-confirm-ok" class="btn-primary glow-btn" style="padding: 8px 18px;">Onay</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+      }
+
+      modal.style.setProperty('z-index', '99999999', 'important');
+
+      const titleEl = modal.querySelector('#confirm-title');
+      const msgEl = modal.querySelector('#confirm-message');
+      const btnOk = modal.querySelector('#btn-confirm-ok');
+      const btnCancel = modal.querySelector('#btn-confirm-cancel');
+      const btnClose = modal.querySelector('#btn-close-confirm');
+
+      if (titleEl) titleEl.textContent = title;
+      if (msgEl) msgEl.textContent = message;
+      if (btnOk) {
+        btnOk.textContent = okText;
+        if (isDanger) {
+          btnOk.style.background = 'var(--color-error, #ff3366)';
+          btnOk.style.borderColor = 'rgba(255,51,102,0.4)';
+          btnOk.style.boxShadow = '0 0 15px rgba(255,51,102,0.3)';
+        } else {
+          btnOk.style.background = 'var(--accent-gradient)';
+          btnOk.style.borderColor = 'transparent';
+          btnOk.style.boxShadow = 'var(--accent-glow-cyan)';
+        }
+      }
+
+      modal.classList.remove('hidden');
+
+      const cleanup = (res) => {
+        confirmActive = false;
+        window._confirmActive = false;
+        modal.classList.add('hidden');
+        if (btnOk) btnOk.onclick = null;
+        if (btnCancel) btnCancel.onclick = null;
+        if (btnClose) btnClose.onclick = null;
+        modal.onclick = null;
+        resolve(res);
+      };
+
+      if (btnOk) btnOk.onclick = () => cleanup(true);
+      if (btnCancel) btnCancel.onclick = () => cleanup(false);
+      if (btnClose) btnClose.onclick = () => cleanup(false);
+      modal.onclick = (e) => {
+        if (e.target === modal) cleanup(false);
+      };
+    });
+  }
+  window.customConfirm = customConfirm;
+
   // ─── INITIALIZATION ───
   function init() {
     if (window._suyliosInitialized) return;
@@ -167,7 +274,7 @@
       if (settings.theme) {
         // selectTheme sets localStorage, dataset.theme, styles and UI active class
         if (typeof selectTheme === 'function') {
-          selectTheme(settings.theme);
+          selectTheme(settings.theme, true);
         } else {
           document.body.dataset.theme = settings.theme;
           localStorage.setItem('suylios_theme', settings.theme);
@@ -316,21 +423,16 @@
 
   // ─── TITLEBAR ───
   function bindTitlebar() {
+    if (window._titlebarBound) return;
+    window._titlebarBound = true;
+
     dom.btnMinimize?.addEventListener('click', () => callApi('minimize_window'));
     dom.btnMaximize?.addEventListener('click', () => callApi('maximize_window'));
     dom.btnClose?.addEventListener('click', () => callApi('close_window'));
 
-    // Double-click titlebar to maximize / restore
     document.getElementById('titlebar')?.addEventListener('dblclick', (e) => {
       if (e.target.closest('button')) return;
       callApi('maximize_window');
-    });
-
-    // Wire shutdown modal from settings page
-    document.addEventListener('click', (e) => {
-      if (e.target?.closest('#btn-open-shutdown-modal')) {
-        $('#shutdown-modal')?.classList.remove('hidden');
-      }
     });
   }
 
@@ -345,7 +447,8 @@
     });
 
     dom.btnClearHistory?.addEventListener('click', async () => {
-      if (confirm('Tüm indirme geçmişi silinecek. Emin misiniz?')) {
+      const ok = await customConfirm('Geçmişi Temizle', 'Tüm indirme geçmişi silinecek. Emin misiniz?', true, 'Sil');
+      if (ok) {
         await callApi('clear_history');
         renderHistory();
         showToast('Geçmiş temizlendi', 'info');
@@ -653,43 +756,55 @@
     });
   }
 
+  let _refreshingDownloads = false;
   async function refreshDownloads() {
-    const downloads = await callApi('get_downloads');
-    if (!downloads) return;
+    if (_refreshingDownloads) return;
+    _refreshingDownloads = true;
+    try {
+      const downloads = await callApi('get_downloads');
+      if (!downloads) return;
 
-    const newIds = new Set();
+      const newIds = new Set();
 
-    for (const dl of downloads) {
-      newIds.add(dl.id);
-      const existing = state.downloads.get(dl.id);
-      state.downloads.set(dl.id, dl);
+      for (const dl of downloads) {
+        try {
+          newIds.add(dl.id);
+          const existing = state.downloads.get(dl.id);
+          state.downloads.set(dl.id, dl);
 
-      if (existing) {
-        if (existing.status !== 'completed' && dl.status === 'completed') {
-          showToast(`${dl.title || 'İndirme'} tamamlandı!`, 'success');
-          callApi('show_desktop_notification', 'Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`);
-        } else if (existing.status !== 'error' && dl.status === 'error') {
-          showToast(`${dl.title || 'İndirme'} başarısız oldu!`, 'error');
-          callApi('show_desktop_notification', 'Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`);
+          if (existing) {
+            if (existing.status !== 'completed' && dl.status === 'completed') {
+              showToast(`${dl.title || 'İndirme'} tamamlandı!`, 'success');
+              // Fire-and-forget: don't await notification to avoid blocking refresh
+              callApi('show_desktop_notification', 'Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`).catch(() => {});
+            } else if (existing.status !== 'error' && dl.status === 'error') {
+              showToast(`${dl.title || 'İndirme'} başarısız oldu!`, 'error');
+              callApi('show_desktop_notification', 'Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`).catch(() => {});
+            }
+            updateDownloadCard(dl);
+          } else {
+            createDownloadCard(dl);
+          }
+        } catch(cardErr) {
+          console.error('[Suylios] Card update error:', cardErr);
         }
-        updateDownloadCard(dl);
-      } else {
-        createDownloadCard(dl);
       }
-    }
 
-    // Remove cards no longer in list
-    for (const [id] of state.downloads) {
-      if (!newIds.has(id)) {
-        removeDownloadCard(id);
-        state.downloads.delete(id);
+      // Remove cards no longer in list
+      for (const [id] of state.downloads) {
+        if (!newIds.has(id)) {
+          removeDownloadCard(id);
+          state.downloads.delete(id);
+        }
       }
-    }
 
-    updateStatusBar(downloads);
-    toggleEmptyState();
-    toggleScheduledEmptyState();
-    updateReorderButtonsVisibility();
+      updateStatusBar(downloads);
+      toggleEmptyState();
+      toggleScheduledEmptyState();
+      updateReorderButtonsVisibility();
+    } finally {
+      _refreshingDownloads = false;
+    }
   }
 
   function toggleEmptyState() {
@@ -788,14 +903,24 @@
     const progressEta = card.querySelector('.progress-eta');
 
     let rawTitle = dl.title || dl.filename || 'İndirme başlıyor...';
+    if (rawTitle.includes('/') || rawTitle.includes('\\')) {
+      rawTitle = rawTitle.split(/[/\\]/).pop();
+    }
     const isComplete = dl.status === 'complete' || dl.status === 'completed';
     if (dl.item_count && dl.item_count > 1 && !isComplete && dl.item_index > 0) {
       const idx = dl.item_index;
-      const displayTitle = dl.title || 'İndiriliyor...';
+      const displayTitle = rawTitle;
       title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${idx}/${dl.item_count}</span><span style="vertical-align: middle;">${escapeHtml(displayTitle)}</span>`;
+    } else if (!dl.item_count && dl.item_index > 0 && !isComplete) {
+      // Gallery/watcher mode: unknown total, show just downloaded count
+      const displayTitle = rawTitle;
+      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${escapeHtml(displayTitle)}</span>`;
     } else if (dl.item_count && dl.item_count > 1 && isComplete) {
       // Completed playlist/archive — show title + total count chip
       title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_count} öğe</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
+    } else if (!dl.item_count && dl.item_index > 0 && isComplete) {
+      // Gallery completed: show final file count
+      title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
     } else {
       title.textContent = rawTitle;
     }
@@ -828,11 +953,11 @@
       pSize = finalSize > 0 ? formatSize(finalSize) : '';
       pEta = completedText;
     } else {
-      // Sadece total_size biliniyorsa veya total_size yokken indirilen byte varsa (ama kullanıcı boyut bilinmiyorsa gizle dediği için sadece total_size varsa gösterelim)
       if (dl.total_size && dl.total_size > 0) {
         pSize = formatSizeRange(dl.downloaded_size, dl.total_size);
+      } else if (dl.downloaded_size && dl.downloaded_size > 0) {
+        pSize = formatSize(dl.downloaded_size);
       }
-      // total_size bilinmiyorsa pSize boş kalır ve UI'da gösterilmez.
 
       if (dl.scheduled_at && dl.scheduled_at > 0) {
         pEta = lang === 'en' ? '⏰ Waiting for scheduled time...' : '⏰ İndirme zamanı bekleniyor...';
@@ -841,7 +966,7 @@
       } else if (dl.status === 'merging') {
         pEta = '📦 Video ve ses birleştiriliyor...';
       } else {
-        pEta = dl.eta ? formatEta(dl.eta) : (dl.downloaded_size > 0 ? '⏳ İndiriliyor...' : '🚀 Başlatılıyor...');
+        pEta = dl.eta ? formatEta(dl.eta) : ((dl.downloaded_size > 0 || dl.item_index > 0 || dl.progress > 0) ? '⏳ İndiriliyor...' : '🚀 Başlatılıyor...');
       }
     }
 
@@ -891,6 +1016,7 @@
     }
 
     // Complete: show ETA as "Tamamlandı", show preview button, hide pause/cancel
+    const retryBtn = card.querySelector('.btn-retry');
     if (dl.status === 'complete' || dl.status === 'completed') {
       progressPercent.textContent = '100%';
       progressEta.textContent = completedText;
@@ -900,8 +1026,15 @@
       if (previewBtn) previewBtn.classList.remove('hidden');
       if (pauseBtn) pauseBtn.classList.add('hidden');
       if (cancelBtn) cancelBtn.classList.add('hidden');
+      if (retryBtn) { retryBtn.classList.remove('hidden'); retryBtn.title = 'Yeniden İndir'; }
+    } else if (dl.status === 'error' || dl.status === 'cancelled') {
+      if (previewBtn) previewBtn.classList.add('hidden');
+      if (pauseBtn) pauseBtn.classList.add('hidden');
+      if (cancelBtn) cancelBtn.classList.add('hidden');
+      if (retryBtn) { retryBtn.classList.remove('hidden'); retryBtn.title = 'Yeniden Dene'; }
     } else {
       if (previewBtn) previewBtn.classList.add('hidden');
+      if (retryBtn) retryBtn.classList.add('hidden');
       if (pauseBtn && dl.status !== 'error' && dl.status !== 'cancelled') pauseBtn.classList.remove('hidden');
       if (cancelBtn && dl.status !== 'error' && dl.status !== 'cancelled') cancelBtn.classList.remove('hidden');
     }
@@ -929,6 +1062,7 @@
 
   function bindCardActions(card, taskId) {
     const previewBtn = card.querySelector('.btn-preview');
+    const retryBtn = card.querySelector('.btn-retry');
     const pauseBtn = card.querySelector('.btn-pause');
     const cancelBtn = card.querySelector('.btn-cancel');
     const folderBtn = card.querySelector('.btn-folder');
@@ -936,6 +1070,16 @@
 
     previewBtn?.addEventListener('click', () => {
       if (window.openPreviewPlayer) window.openPreviewPlayer(taskId);
+    });
+
+    retryBtn?.addEventListener('click', async () => {
+      const dl = state.downloads.get(taskId);
+      const result = await callApi('retry_download', taskId);
+      if (result?.ok) {
+        showToast(`${dl?.title || 'İndirme'} yeniden başlatıldı.`, 'info');
+      } else {
+        showToast('Yeniden indirme başlatılamadı.', 'error');
+      }
     });
 
     pauseBtn?.addEventListener('click', async () => {
@@ -1062,6 +1206,8 @@
 
   // ─── SETTINGS CONTROLS ───
   function bindSettingsControls() {
+    if (window._settingsControlsBound) return;
+    window._settingsControlsBound = true;
     // Concurrent downloads input handled automatically by auto-save
 
 
@@ -1088,74 +1234,30 @@
       showToast('Önbellek temizlendi', 'success');
     });
 
-    // Custom confirm modal helper
-    let confirmActive = false;
-    function customConfirm(message, title = 'Onay', okText = 'Tamam', isDanger = false) {
-      if (confirmActive) return Promise.resolve(false);
-      confirmActive = true;
-      return new Promise((resolve) => {
-        let modal = document.getElementById('confirm-modal');
-        // If it doesn't exist, create it dynamically
-        if (!modal) {
-          modal = document.createElement('div');
-          modal.id = 'confirm-modal';
-          modal.className = 'modal-overlay hidden';
-          modal.style.zIndex = '100000';
-          modal.innerHTML = `
-            <div class="modal-content glass-panel" style="max-width: 400px;">
-              <div class="modal-header">
-                <h3 id="confirm-title">Onay</h3>
-                <button id="btn-close-confirm" class="modal-close-btn">✕</button>
-              </div>
-              <div class="modal-body" style="padding: 10px 0;">
-                <p id="confirm-message" style="font-size: 13.5px; color: var(--text-secondary); line-height: 1.5;"></p>
-              </div>
-              <div class="modal-footer" style="gap: 10px;">
-                <button id="btn-confirm-cancel" class="btn-secondary">İptal</button>
-                <button id="btn-confirm-ok" class="btn-primary glow-btn">Onay</button>
-              </div>
-            </div>
-          `;
-          document.body.appendChild(modal);
+    // Blocklist
+    const blocklistInput = $('#setting-blocklist-input');
+    const btnAddBlocklist = $('#btn-add-blocklist');
+    
+    btnAddBlocklist?.addEventListener('click', () => {
+      const val = blocklistInput.value.trim();
+      if (val) {
+        if (!state.settings) state.settings = {};
+        if (!state.settings.blocklist) state.settings.blocklist = [];
+        if (!state.settings.blocklist.includes(val)) {
+          state.settings.blocklist.push(val);
+          blocklistInput.value = '';
+          renderBlocklist();
+          saveCurrentSettings();
         }
+      }
+    });
 
-        const titleEl = modal.querySelector('#confirm-title');
-        const msgEl = modal.querySelector('#confirm-message');
-        const btnOk = modal.querySelector('#btn-confirm-ok');
-        const btnCancel = modal.querySelector('#btn-confirm-cancel');
-        const btnClose = modal.querySelector('#btn-close-confirm');
-
-        titleEl.textContent = title;
-        msgEl.textContent = message;
-        btnOk.textContent = okText;
-        if (isDanger) {
-          btnOk.style.background = 'var(--color-error)';
-          btnOk.style.borderColor = 'rgba(255,82,82,0.3)';
-        } else {
-          btnOk.style.background = 'var(--accent-gradient)';
-          btnOk.style.borderColor = 'transparent';
-        }
-
-        modal.classList.remove('hidden');
-
-        const cleanup = (res) => {
-          confirmActive = false;
-          modal.classList.add('hidden');
-          btnOk.onclick = null;
-          btnCancel.onclick = null;
-          btnClose.onclick = null;
-          modal.onclick = null;
-          resolve(res);
-        };
-
-        btnOk.onclick = () => cleanup(true);
-        btnCancel.onclick = () => cleanup(false);
-        btnClose.onclick = () => cleanup(false);
-        modal.onclick = (e) => {
-          if (e.target === modal) cleanup(false);
-        };
-      });
-    }
+    blocklistInput?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        btnAddBlocklist.click();
+      }
+    });
 
     // Reset settings
     if (dom.btnResetSettings) {
@@ -1186,6 +1288,8 @@
 
     // Auto-save on change for all settings inputs
     $$('.settings-tab input, .settings-tab select, #home-compress-archive, #home-compress-format').forEach(el => {
+      if (el.dataset.autoSaveBound) return;
+      el.dataset.autoSaveBound = 'true';
       el.addEventListener('change', () => {
         if (el.id === 'setting-language') {
           applyLanguage(el.value);
@@ -1314,7 +1418,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.0');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.1');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
@@ -1441,6 +1545,10 @@
       const el = $('#setting-video-format');
       if (el) el.value = settings.video_format;
     }
+    if (settings.blocklist !== undefined) {
+      state.settings.blocklist = settings.blocklist;
+      renderBlocklist();
+    }
     if (settings.audio_format) {
       const el = $('#setting-audio-format');
       if (el) el.value = settings.audio_format;
@@ -1539,20 +1647,61 @@
       audio_format: $('#setting-audio-format')?.value || 'mp3',
       default_quality: $('#setting-default-quality')?.value || 'best',
       mp3_bitrate: parseInt($('#setting-mp3-bitrate')?.value) || 192,
-      concurrent_downloads: dom.settingConcurrent && dom.settingConcurrent.value !== '' ? parseInt(dom.settingConcurrent.value, 10) : 0,
+      concurrent_downloads: $('#setting-sequential-download')?.checked ? 1 : (dom.settingConcurrent && dom.settingConcurrent.value !== '' && parseInt(dom.settingConcurrent.value, 10) > 0 ? parseInt(dom.settingConcurrent.value, 10) : 3),
       sequential_download: $('#setting-sequential-download')?.checked ?? false,
       speed_limit: (parseFloat($('#setting-speed-limit')?.value) || 0) * 1024 * 1024,
       proxy: $('#setting-proxy')?.value || '',
       ffmpeg_path: $('#setting-ffmpeg-path')?.value || '',
-      theme: document.body.dataset.theme || 'suylios',
+      theme: state.settings?.theme || document.body.dataset.theme || 'suylios',
       site_settings: state.settings?.site_settings || {},
       custom_sites: state.settings?.custom_sites || [],
+      custom_themes: state.settings?.custom_themes || [],
+      blocklist: state.settings?.blocklist || [],
     };
 
     const result = await callApi('save_settings', JSON.stringify(settings));
     if (result?.success) {
       state.settings = settings;
     }
+  }
+
+  function renderBlocklist() {
+    const container = $('#blocklist-container');
+    if (!container) return;
+    container.innerHTML = '';
+    const list = state.settings?.blocklist || [];
+    if (list.length === 0) {
+      container.innerHTML = '<span style="font-size:12px; color:var(--text-tertiary);">Henüz engellenen link eklenmedi.</span>';
+      return;
+    }
+    list.forEach(item => {
+      const tag = document.createElement('div');
+      tag.className = 'site-tag tag-cyan';
+      tag.style.display = 'flex';
+      tag.style.alignItems = 'center';
+      tag.style.gap = '5px';
+      tag.style.paddingRight = '5px';
+      
+      const text = document.createElement('span');
+      text.textContent = item;
+      
+      const removeBtn = document.createElement('span');
+      removeBtn.innerHTML = '✕';
+      removeBtn.style.cursor = 'pointer';
+      removeBtn.style.opacity = '0.7';
+      removeBtn.style.fontSize = '10px';
+      removeBtn.addEventListener('click', () => {
+        state.settings.blocklist = state.settings.blocklist.filter(x => x !== item);
+        renderBlocklist();
+        saveCurrentSettings();
+      });
+      removeBtn.addEventListener('mouseover', () => removeBtn.style.opacity = '1');
+      removeBtn.addEventListener('mouseout', () => removeBtn.style.opacity = '0.7');
+      
+      tag.appendChild(text);
+      tag.appendChild(removeBtn);
+      container.appendChild(tag);
+    });
   }
 
   // ─── STATUS BAR ───
@@ -1694,7 +1843,10 @@
     }
     
     if (themeId && themeId.startsWith('custom_')) {
-      const themes = themesArray || (state.settings?.custom_themes || []);
+      let themes = themesArray || (state.settings?.custom_themes || []);
+      if (themes.length === 0) {
+        try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      }
       const theme = themes.find(t => t.id === themeId);
       if (theme) {
         // We set data-theme to the base template to inherit properties,
@@ -1741,7 +1893,10 @@
     // Remove existing custom cards
     grid.querySelectorAll('.theme-card.custom-card').forEach(el => el.remove());
     
-    const themes = state.settings?.custom_themes || [];
+    let themes = state.settings?.custom_themes || [];
+    if (themes.length === 0) {
+      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+    }
     if (themes.length === 0) {
       emptyState.style.display = 'block';
       return;
@@ -1758,29 +1913,42 @@
       card.dataset.theme = theme.id;
       card.dataset.isCustom = 'true';
       
-      const grad = `linear-gradient(135deg, ${theme.colors.bgPrimary} 0%, ${theme.colors.bgSecondary} 100%)`;
+      const baseImgMap = {
+        'suylios': 'suylios.png',
+        'basit-beyaz': 'beyaz.png',
+        'basit-koyu': 'koyu.png',
+        'matrix': 'matrix.png',
+        'blood': 'crimson.png',
+        'sunset': 'gold.png'
+      };
+      const imgFile = baseImgMap[theme.base] || 'suylios.png';
+      const bgStyle = `background-image: linear-gradient(135deg, rgba(0,0,0,0.25) 0%, ${theme.colors.accent1}66 100%), url('../assets/themes/${imgFile}'); background-size: cover; background-position: top center;`;
       
       card.innerHTML = `
-        <div class="theme-preview" style="background: ${grad}; position:relative; overflow:hidden;">
+        <div class="theme-preview" style="${bgStyle} position:relative; overflow:hidden;">
            <div style="position:absolute; bottom:0; left:0; width:100%; height:4px; background: linear-gradient(90deg, ${theme.colors.accent1}, ${theme.colors.accent2});"></div>
-           <button class="btn-edit-theme" style="position:absolute; top:8px; right:8px; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.2); color:#fff; border-radius:4px; cursor:pointer; font-size:11px; padding:2px 6px;">Düzenle</button>
+           <button class="btn-edit-theme" title="Düzenle">
+             <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+             <span>Düzenle</span>
+           </button>
         </div>
         <span class="theme-name">${escapeHtml(theme.name)}</span>
       `;
       
-      card.addEventListener('click', (e) => {
+      card.onclick = (e) => {
         if (e.target.closest('.btn-edit-theme')) {
+          e.stopPropagation();
           openThemeEditor(theme);
           return;
         }
         selectTheme(theme.id);
-      });
+      };
       
       grid.appendChild(card);
     });
   }
 
-  function selectTheme(themeId) {
+  function selectTheme(themeId, silent) {
     applyCustomTheme(themeId);
     localStorage.setItem('suylios_theme', themeId);
     
@@ -1790,21 +1958,24 @@
     
     if (state.settings) {
       state.settings.theme = themeId;
-      saveCurrentSettings();
+      if (!silent) saveCurrentSettings();
     }
-    showToast('Tema güncellendi', 'success');
+    if (!silent) showToast('Tema güncellendi', 'success');
   }
 
   function bindThemes() {
-    const savedTheme = localStorage.getItem('suylios_theme') || 'suylios';
+    if (window._themesBound) return;
+    window._themesBound = true;
+
+    const savedTheme = localStorage.getItem('suylios_theme') || 'basit-beyaz';
     applyCustomTheme(savedTheme);
 
     const builtInCards = document.querySelectorAll('.theme-cards-grid:not(#custom-themes-grid) .theme-card');
     builtInCards.forEach(card => {
       card.classList.toggle('active', card.dataset.theme === savedTheme);
-      card.addEventListener('click', () => {
+      card.onclick = () => {
         selectTheme(card.dataset.theme);
-      });
+      };
     });
     
     renderCustomThemes();
@@ -1812,6 +1983,8 @@
   }
 
   function bindThemeEditor() {
+    if (window._themeEditorBound) return;
+    window._themeEditorBound = true;
     const modal = document.getElementById('custom-theme-modal');
     const btnCreate = document.getElementById('btn-create-theme');
     const btnClose = document.getElementById('btn-close-theme-modal');
@@ -1839,55 +2012,116 @@
           accent2: document.getElementById('color-accent-2').value,
         }
       };
-      // Temporarily apply it
       applyCustomTheme(fakeThemeId, [fakeTheme]);
     }
     
     colorInputs.forEach(input => {
-      input.addEventListener('input', (e) => {
+      input.oninput = (e) => {
         const hexSpan = document.getElementById('hex-' + e.target.id.replace('color-', ''));
         if (hexSpan) hexSpan.textContent = e.target.value;
         updatePreview();
-      });
+      };
     });
     
-    baseSelect.addEventListener('change', updatePreview);
+    const templatePresets = {
+      'suylios': { bgPrimary: '#0a0a0f', bgSecondary: '#0f0f18', textPrimary: '#e8eaed', textSecondary: '#9aa0a6', accent1: '#00f0ff', accent2: '#b44aff' },
+      'basit-beyaz': { bgPrimary: '#f0f2f5', bgSecondary: '#ffffff', textPrimary: '#1a1a24', textSecondary: '#4a5568', accent1: '#0066ff', accent2: '#0052cc' },
+      'basit-koyu': { bgPrimary: '#121214', bgSecondary: '#18181b', textPrimary: '#f4f4f5', textSecondary: '#a1a1aa', accent1: '#a1a1aa', accent2: '#71717a' },
+      'matrix': { bgPrimary: '#050b06', bgSecondary: '#0a140c', textPrimary: '#e0ffe0', textSecondary: '#66aa66', accent1: '#00ff66', accent2: '#00b347' },
+      'blood': { bgPrimary: '#0d0608', bgSecondary: '#160a0e', textPrimary: '#ffe6ed', textSecondary: '#aa667a', accent1: '#ff2a6d', accent2: '#b31243' },
+      'sunset': { bgPrimary: '#0f0a14', bgSecondary: '#181022', textPrimary: '#fffbf0', textSecondary: '#baa2d6', accent1: '#ff9e00', accent2: '#ff5200' }
+    };
+
+    baseSelect.onchange = () => {
+      const preset = templatePresets[baseSelect.value];
+      if (preset) {
+        const setCol = (id, val) => {
+          const input = document.getElementById('color-' + id);
+          if (input) input.value = val;
+          const hexSpan = document.getElementById('hex-' + id);
+          if (hexSpan) hexSpan.textContent = val;
+        };
+        setCol('bg-primary', preset.bgPrimary);
+        setCol('bg-secondary', preset.bgSecondary);
+        setCol('text-primary', preset.textPrimary);
+        setCol('text-secondary', preset.textSecondary);
+        setCol('accent-1', preset.accent1);
+        setCol('accent-2', preset.accent2);
+      }
+      updatePreview();
+    };
     
-    btnCreate.addEventListener('click', () => {
+    btnCreate.onclick = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
       document.getElementById('custom-theme-id').value = '';
       document.getElementById('custom-theme-name').value = '';
       btnDelete.style.display = 'none';
       modal.classList.remove('hidden');
-      // Set defaults based on suylios
-      document.getElementById('custom-theme-base').value = 'suylios';
+      
+      const currentThemeId = localStorage.getItem('suylios_theme') || document.body.dataset.theme || 'suylios';
+      let activeBase = 'suylios';
+      let activeColors = templatePresets['suylios'];
+
+      if (currentThemeId.startsWith('custom_')) {
+        let customThemes = state.settings?.custom_themes || [];
+        if (customThemes.length === 0) {
+          try { customThemes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e){}
+        }
+        const found = customThemes.find(t => t.id === currentThemeId);
+        if (found) {
+          activeBase = found.base || 'suylios';
+          activeColors = found.colors || templatePresets[activeBase] || templatePresets['suylios'];
+        }
+      } else if (templatePresets[currentThemeId]) {
+        activeBase = currentThemeId;
+        activeColors = templatePresets[currentThemeId];
+      }
+
+      const baseSel = document.getElementById('custom-theme-base');
+      if (baseSel) {
+        baseSel.value = activeBase;
+        const opt = baseSel.options[baseSel.selectedIndex];
+        const textSpan = baseSel.closest('div')?.querySelector('.cyber-dropdown-text');
+        if (textSpan && opt) textSpan.textContent = opt.text;
+      }
       
       const setCol = (id, val) => {
         const input = document.getElementById('color-' + id);
-        input.value = val;
-        document.getElementById('hex-' + id).textContent = val;
+        if (input) input.value = val;
+        const hexSpan = document.getElementById('hex-' + id);
+        if (hexSpan) hexSpan.textContent = val;
       };
       
-      setCol('bg-primary', '#0a0a0f');
-      setCol('bg-secondary', '#121214');
-      setCol('text-primary', '#ffffff');
-      setCol('text-secondary', '#a1a1aa');
-      setCol('accent-1', '#00f0ff');
-      setCol('accent-2', '#a855f7');
+      setCol('bg-primary', activeColors.bgPrimary || '#0a0a0f');
+      setCol('bg-secondary', activeColors.bgSecondary || '#0f0f18');
+      setCol('text-primary', activeColors.textPrimary || '#e8eaed');
+      setCol('text-secondary', activeColors.textSecondary || '#9aa0a6');
+      setCol('accent-1', activeColors.accent1 || '#00f0ff');
+      setCol('accent-2', activeColors.accent2 || '#b44aff');
       
       updatePreview();
-    });
+    };
     
     window.openThemeEditor = function(theme) {
+      if (!modal.classList.contains('hidden')) return;
       document.getElementById('custom-theme-id').value = theme.id;
       document.getElementById('custom-theme-name').value = theme.name;
-      document.getElementById('custom-theme-base').value = theme.base;
+      
+      const baseSel = document.getElementById('custom-theme-base');
+      if (baseSel) {
+        baseSel.value = theme.base;
+        const opt = baseSel.options[baseSel.selectedIndex];
+        const textSpan = baseSel.closest('div')?.querySelector('.cyber-dropdown-text');
+        if (textSpan && opt) textSpan.textContent = opt.text;
+      }
       
       btnDelete.style.display = 'flex';
       
       const setCol = (id, val) => {
         const input = document.getElementById('color-' + id);
-        input.value = val;
-        document.getElementById('hex-' + id).textContent = val;
+        if (input) input.value = val;
+        const hexSpan = document.getElementById('hex-' + id);
+        if (hexSpan) hexSpan.textContent = val;
       };
       
       setCol('bg-primary', theme.colors.bgPrimary);
@@ -1903,15 +2137,17 @@
     
     const closeModal = () => {
       modal.classList.add('hidden');
-      // Restore actual active theme
-      const currentTheme = localStorage.getItem('suylios_theme') || 'suylios';
+      const currentTheme = localStorage.getItem('suylios_theme') || 'basit-beyaz';
       applyCustomTheme(currentTheme);
     };
     
-    btnClose.addEventListener('click', closeModal);
-    btnCancel.addEventListener('click', closeModal);
+    btnClose.onclick = closeModal;
+    btnCancel.onclick = closeModal;
+    modal.onclick = (e) => {
+      if (e.target === modal) closeModal();
+    };
     
-    btnSave.addEventListener('click', () => {
+    btnSave.onclick = () => {
       const id = document.getElementById('custom-theme-id').value || ('custom_' + Date.now());
       let name = document.getElementById('custom-theme-name').value.trim();
       if (!name) name = 'Yeni Tema';
@@ -1930,48 +2166,59 @@
         }
       };
       
-      if (!state.settings.custom_themes) {
-        state.settings.custom_themes = [];
-      }
+      if (!state.settings) state.settings = {};
+      let themes = [];
+      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      if (themes.length === 0 && state.settings.custom_themes) themes = [...state.settings.custom_themes];
       
-      const existingIdx = state.settings.custom_themes.findIndex(t => t.id === id);
+      const existingIdx = themes.findIndex(t => t.id === id);
       if (existingIdx >= 0) {
-        state.settings.custom_themes[existingIdx] = theme;
+        themes[existingIdx] = theme;
       } else {
-        state.settings.custom_themes.push(theme);
+        themes.push(theme);
       }
       
+      state.settings.custom_themes = themes;
+      try { localStorage.setItem('suylios_custom_themes', JSON.stringify(themes)); } catch(e) {}
       saveCurrentSettings();
       renderCustomThemes();
       selectTheme(id);
       
       modal.classList.add('hidden');
-    });
+    };
     
-    btnDelete.addEventListener('click', () => {
+    btnDelete.onclick = async (e) => {
+      if (e) e.preventDefault();
       const id = document.getElementById('custom-theme-id').value;
       if (!id) return;
+      const ok = await customConfirm('Temayı Sil', 'Bu temayı silmek istediğinize emin misiniz?', true, 'Sil');
+      if (!ok) return;
       
-      if (!confirm('Bu temayı silmek istediğinize emin misiniz?')) return;
+      if (!state.settings) state.settings = {};
+      let themes = [];
+      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      if (themes.length === 0 && state.settings.custom_themes) themes = [...state.settings.custom_themes];
+
+      themes = themes.filter(t => t.id !== id);
+      state.settings.custom_themes = themes;
+      try { localStorage.setItem('suylios_custom_themes', JSON.stringify(themes)); } catch(e) {}
       
-      if (state.settings.custom_themes) {
-        state.settings.custom_themes = state.settings.custom_themes.filter(t => t.id !== id);
-        saveCurrentSettings();
-      }
-      
-      const currentTheme = localStorage.getItem('suylios_theme');
+      const currentTheme = localStorage.getItem('suylios_theme') || document.body.dataset.theme;
       if (currentTheme === id) {
-        selectTheme('suylios');
-      } else {
-        renderCustomThemes();
+        selectTheme('basit-beyaz');
       }
+      
+      renderCustomThemes();
+      saveCurrentSettings();
       
       modal.classList.add('hidden');
-    });
+    };
   }
 
   // ─── SITE CONFIGURATION MODAL ───
   function bindSiteSettings() {
+    if (window._siteSettingsBound) return;
+    window._siteSettingsBound = true;
     const modal = document.getElementById('site-modal');
     const closeBtn = document.getElementById('btn-close-modal');
     const saveBtn = document.getElementById('btn-save-site');
@@ -2148,6 +2395,8 @@
   }
 
   function bindAddSiteModal() {
+    if (window._addSiteModalBound) return;
+    window._addSiteModalBound = true;
     const modal = document.getElementById('add-site-modal');
     const openBtn = document.getElementById('btn-add-custom-site');
     const closeBtn = document.getElementById('btn-close-add-site-modal');
@@ -2254,10 +2503,10 @@
       });
     }
 
-    openBtn.addEventListener('click', (e) => { e.preventDefault(); openModal(); });
-    if (closeBtn) closeBtn.addEventListener('click', () => modal.classList.add('hidden'));
-    if (cancelBtn) cancelBtn.addEventListener('click', () => modal.classList.add('hidden'));
-    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+    openBtn.onclick = (e) => { if (e) e.preventDefault(); if (!modal.classList.contains('hidden')) return; openModal(); };
+    if (closeBtn) closeBtn.onclick = () => modal.classList.add('hidden');
+    if (cancelBtn) cancelBtn.onclick = () => modal.classList.add('hidden');
+    modal.onclick = (e) => { if (e.target === modal) modal.classList.add('hidden'); };
 
     if (searchInput) {
       searchInput.addEventListener('input', (e) => renderFilteredList(e.target.value));
@@ -2463,6 +2712,8 @@
   // v1.2.0 ─ BATCH DOWNLOAD MODAL
   // ═══════════════════════════════════════════════════════
   function initBatchModal() {
+    if (window._batchModalBound) return;
+    window._batchModalBound = true;
     const modal = $('#batch-modal');
     const btnOpen = $('#btn-batch');
     const btnClose = $('#btn-close-batch');
@@ -2471,11 +2722,11 @@
 
     if (!modal || !btnOpen) return;
 
-    btnOpen.addEventListener('click', () => modal.classList.remove('hidden'));
+    btnOpen.onclick = (e) => { if (e) e.preventDefault(); if (!modal.classList.contains('hidden')) return; modal.classList.remove('hidden'); };
     const closeModal = () => modal.classList.add('hidden');
-    btnClose?.addEventListener('click', closeModal);
-    btnCancel?.addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    if (btnClose) btnClose.onclick = closeModal;
+    if (btnCancel) btnCancel.onclick = closeModal;
+    modal.onclick = e => { if (e.target === modal) closeModal(); };
 
     const txtInput = $('#batch-txt-input');
     txtInput?.addEventListener('change', (e) => {
@@ -2735,6 +2986,8 @@
   // v1.2.0 ─ SCHEDULED DOWNLOAD MODAL
   // ═══════════════════════════════════════════════════════
   function initScheduleModal() {
+    if (window._scheduleModalBound) return;
+    window._scheduleModalBound = true;
     const modal = $('#schedule-modal');
     const btnOpen = $('#btn-schedule');
     const btnClose = $('#btn-close-schedule');
@@ -2743,7 +2996,9 @@
 
     if (!modal || !btnOpen) return;
 
-    btnOpen.addEventListener('click', () => {
+    btnOpen.onclick = (e) => {
+      if (e) e.preventDefault();
+      if (!modal.classList.contains('hidden')) return;
       const urlInput = $('#url-input');
       const schedUrl = $('#schedule-url');
       if (schedUrl && urlInput?.value) schedUrl.value = urlInput.value;
@@ -2751,12 +3006,12 @@
       now.setMinutes(now.getMinutes() + 5);
       if (typeof populateCustomDateFields === 'function') populateCustomDateFields(window.CURRENT_LANG || 'tr', now);
       modal.classList.remove('hidden');
-    });
+    };
 
     const closeModal = () => modal.classList.add('hidden');
-    btnClose?.addEventListener('click', closeModal);
-    btnCancel?.addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    if (btnClose) btnClose.onclick = closeModal;
+    if (btnCancel) btnCancel.onclick = closeModal;
+    modal.onclick = e => { if (e.target === modal) closeModal(); };
 
     btnConfirm?.addEventListener('click', async () => {
       const lang = window.CURRENT_LANG || 'tr';
@@ -2941,17 +3196,28 @@
   // v1.2.0 ─ AUTO SHUTDOWN MODAL
   // ═══════════════════════════════════════════════════════
   function initShutdownModal() {
+    if (window._shutdownModalBound) return;
+    window._shutdownModalBound = true;
     const modal = $('#shutdown-modal');
+    const openBtn = $('#btn-open-shutdown-modal');
     const btnClose = $('#btn-close-shutdown');
     const btnCancel = $('#btn-shutdown-cancel');
     const btnConfirm = $('#btn-shutdown-confirm');
 
     if (!modal) return;
 
+    if (openBtn) {
+      openBtn.onclick = (e) => {
+        if (e) e.preventDefault();
+        if (!modal.classList.contains('hidden')) return;
+        modal.classList.remove('hidden');
+      };
+    }
+
     const closeModal = () => modal.classList.add('hidden');
-    btnClose?.addEventListener('click', closeModal);
-    btnCancel?.addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    if (btnClose) btnClose.onclick = closeModal;
+    if (btnCancel) btnCancel.onclick = closeModal;
+    modal.onclick = e => { if (e.target === modal) closeModal(); };
 
     btnConfirm?.addEventListener('click', async () => {
       const selected = document.querySelector('input[name="shutdown-mode"]:checked');
@@ -3123,6 +3389,8 @@
   }
 
   function initPreviewModal() {
+    if (window._previewModalBound) return;
+    window._previewModalBound = true;
     const modal = $('#preview-modal');
     const btnClose = $('#btn-close-preview');
     if (!modal) return;
@@ -3137,19 +3405,25 @@
       _previewPlaylist = [];
     };
 
-    btnClose?.addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    if (btnClose) btnClose.onclick = closeModal;
+    modal.onclick = e => { if (e.target === modal) closeModal(); };
 
-    $('#btn-preview-prev')?.addEventListener('click', () => loadPreviewItem(_previewIndex - 1));
-    $('#btn-preview-next')?.addEventListener('click', () => loadPreviewItem(_previewIndex + 1));
+    const prevBtn = $('#btn-preview-prev');
+    const nextBtn = $('#btn-preview-next');
+    const openFolderBtn = $('#btn-preview-open-folder');
 
-    $('#btn-preview-open-folder')?.addEventListener('click', () => {
-      if (_previewPlaylist && _previewPlaylist[_previewIndex] && _previewPlaylist[_previewIndex].filepath) {
-        callApi('open_file_location', _previewPlaylist[_previewIndex].filepath);
-      } else if (_currentPreviewTaskId) {
-        callApi('open_file_location', _currentPreviewTaskId);
-      }
-    });
+    if (prevBtn) prevBtn.onclick = () => loadPreviewItem(_previewIndex - 1);
+    if (nextBtn) nextBtn.onclick = () => loadPreviewItem(_previewIndex + 1);
+
+    if (openFolderBtn) {
+      openFolderBtn.onclick = () => {
+        if (_previewPlaylist && _previewPlaylist[_previewIndex] && _previewPlaylist[_previewIndex].filepath) {
+          callApi('open_file_location', _previewPlaylist[_previewIndex].filepath);
+        } else if (_currentPreviewTaskId) {
+          callApi('open_file_location', _currentPreviewTaskId);
+        }
+      };
+    }
 
     // Auto-play next track when audio/video ends in a playlist!
     $('#preview-video')?.addEventListener('ended', () => {

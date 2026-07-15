@@ -8,6 +8,7 @@ Supports portable mode (relative ./bin/) and installed mode.
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
     "language": "tr",
     "start_minimized": False,
     "auto_start_windows": False,
-    "background_mode": True,
+    "background_mode": False,
     "auto_shutdown": False,
     "embed_metadata": True,
     "download_subtitles": False,
@@ -61,6 +62,12 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
         "ehentai": {"folder": "E-Hentai", "quality": "best", "cookies": ""},
         "other": {"folder": "Others", "quality": "best", "cookies": ""},
     },
+    "blocklist": [
+        "instagram.com",
+        "tiktok.com",
+        "facebook.com",
+        "youtube.com"
+    ],
 }
 
 

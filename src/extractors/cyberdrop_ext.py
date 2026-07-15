@@ -15,7 +15,8 @@ import sys
 import tempfile
 from typing import Any, Optional
 
-from src.extractors.base_extractor import BaseExtractor, ExtractionError
+from src.extractors.base_extractor import BaseExtractor, ExtractionError, ExtractionCancelled
+from src.extractors.gallery_ext import _register_proc, _unregister_proc
 
 logger = logging.getLogger("suylios.extractor.cyberdrop")
 
@@ -160,29 +161,43 @@ class CyberdropDLExtractor(BaseExtractor):
                 errors="replace",
                 cwd=safe_cwd,
             )
+            _uid = getattr(self, "_uid", "cdl") or "cdl"
+            _register_proc(_uid, process)
 
             files_before = set(os.listdir(output_path)) if os.path.exists(output_path) else set()
             scrape_failures = 0
-            while True:
-                line = process.stdout.readline() if process.stdout else ""
-                if not line and process.poll() is not None:
-                    break
-                if line:
-                    line_str = line.strip()
-                    logger.debug("CDL: %s", line_str)
-                    if "Scrape Failures" in line_str or "401 HTTP Status" in line_str or "404 HTTP Status" in line_str or "PermissionError" in line_str:
-                        scrape_failures += 1
-                    if progress_hook and ("downloading" in line_str.lower() or "%" in line_str or "file" in line_str.lower()):
-                        progress_hook(
-                            {
-                                "status": "downloading",
-                                "item_title": line_str[:80],
-                            }
-                        )
+            try:
+                while True:
+                    if cancel_event.is_set():
+                        try:
+                            process.terminate()
+                        except Exception:
+                            pass
+                        raise ExtractionCancelled("cyberdrop-dl download was cancelled")
+                    line = process.stdout.readline() if process.stdout else ""
+                    if not line and process.poll() is not None:
+                        break
+                    if line:
+                        line_str = line.strip()
+                        logger.debug("CDL: %s", line_str)
+                        if "Scrape Failures" in line_str or "401 HTTP Status" in line_str or "404 HTTP Status" in line_str or "PermissionError" in line_str:
+                            scrape_failures += 1
+                        if progress_hook and ("downloading" in line_str.lower() or "%" in line_str or "file" in line_str.lower()):
+                            progress_hook(
+                                {
+                                    "status": "downloading",
+                                    "item_title": line_str[:80],
+                                }
+                            )
 
-            ret = process.poll()
-            if ret != 0:
-                logger.warning("cyberdrop-dl finished with return code %s", ret)
+                if cancel_event.is_set():
+                    raise ExtractionCancelled("cyberdrop-dl download was cancelled")
+
+                ret = process.poll()
+                if ret != 0:
+                    logger.warning("cyberdrop-dl finished with return code %s", ret)
+            finally:
+                _unregister_proc(_uid, process)
 
             files_after = set(os.listdir(output_path)) if os.path.exists(output_path) else set()
             new_files = [f for f in (files_after - files_before) if f not in ("AppData", ".suylios_cdl_data")]
@@ -196,6 +211,8 @@ class CyberdropDLExtractor(BaseExtractor):
             first_new = os.path.join(output_path, new_files[0])
             return first_new
 
+        except ExtractionCancelled:
+            raise
         except Exception as exc:
             logger.error("cyberdrop-dl download error: %s", exc, exc_info=True)
             raise ExtractionError(f"cyberdrop-dl failed: {exc}") from exc
