@@ -273,6 +273,17 @@ def build_setup():
     print("\n" + "="*60)
     print("  2. Kurulum Sihirbazı (Suylios-Setup.exe) Hazırlanıyor")
     print("="*60)
+    iscc = find_inno_setup()
+    if not iscc:
+        print("[UYARI] Inno Setup (ISCC) Windows kurulum derleyicisi bulunamadı!")
+        if os.name != "nt":
+            print("        Not: Setup.exe yalnızca Windows üzerinde veya Inno Setup kuruluysa derlenebilir.")
+            print("        Linux üzerinde Taşınabilir ZIP (1) veya Tek Dosya Standalone (3) seçeneklerini kullanabilirsiniz.")
+        staging_dir = DIST_DIR / "setup-staging"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        return
+
     build_out = build_onedir()
 
     staging_dir = DIST_DIR / "setup-staging"
@@ -303,11 +314,6 @@ def build_setup():
             subprocess.run(["attrib", "+h", str(internal_dir)], check=False)
         except Exception:
             pass
-
-    iscc = find_inno_setup()
-    if not iscc:
-        print("[UYARI] Inno Setup bulunamadı! Setup.exe oluşturulamıyor.")
-        return
 
     icon_file = SRC_DIR / "ui" / "icon.ico"
     info_tr_file = BUILD_DIR / "info_tr.txt"
@@ -391,6 +397,7 @@ def build_onefile():
 def clean_temp():
     print("[*] Geçici derleme dosyaları temizleniyor...")
     shutil.rmtree(BUILD_DIR, ignore_errors=True)
+    shutil.rmtree(DIST_DIR / "setup-staging", ignore_errors=True)
     for f in PROJECT_ROOT.glob("*.spec"):
         try:
             f.unlink()
