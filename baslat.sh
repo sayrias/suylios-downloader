@@ -48,6 +48,11 @@ else
         sed -i 's/include-system-site-packages = false/include-system-site-packages = true/g' venv/pyvenv.cfg
     fi
     source venv/bin/activate
+    # Linux üzerinde qtpy veya PyQt6 eksikse otomatik kur (önceki venv'den kalmışsa)
+    if ! python3 -c "import qtpy" &> /dev/null; then
+        echo "[INFO] Linux PyQt6/WebEngine GUI paketleri eksik, otomatik yükleniyor..."
+        pip install -r requirements.txt
+    fi
 fi
 
 # 3. Linux GUI (WebKit2GTK / PyGObject) Kontrolü

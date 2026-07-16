@@ -34,7 +34,7 @@ APP_NAME = "Suylios Downloader"
 try:
     from src.main import APP_VERSION
 except Exception:
-    APP_VERSION = "1.4.1"
+    APP_VERSION = "1.4.2"
 APP_PUBLISHER = "Suylios"
 APP_URL = "https://github.com/sayrias/suylios-downloader"
 APP_EXE = "suylios.exe"

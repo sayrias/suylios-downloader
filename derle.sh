@@ -32,12 +32,13 @@ show_menu() {
     echo "========================================================="
     echo ""
     echo "   1 - Taşınabilir ZIP Paketi Derle (Suylios-Portable.zip)"
-    echo "   2 - Tek Dosya Standalone Derle (Onefile Binary)"
-    echo "   3 - Hepsini Sırayla Derle (Tümünü Üret)"
+    echo "   2 - Kurulum Sihirbazı Derle (Suylios-Setup.exe / Installer)"
+    echo "   3 - Tek Dosya Standalone Derle (Onefile Binary)"
+    echo "   4 - Hepsini Sırayla Derle (Tümünü Üret)"
     echo "   0 - Çıkış"
     echo ""
     echo "========================================================="
-    read -p "Seçiminiz (0-3): " secim
+    read -p "Seçiminiz (0-4): " secim
     echo ""
 
     case "$secim" in
@@ -47,11 +48,16 @@ show_menu() {
             show_menu
             ;;
         2)
-            $PY_CMD build.py onefile
+            $PY_CMD build.py setup
             read -p "İşlem tamamlandı! Devam etmek için Enter tuşuna basın..."
             show_menu
             ;;
         3)
+            $PY_CMD build.py onefile
+            read -p "İşlem tamamlandı! Devam etmek için Enter tuşuna basın..."
+            show_menu
+            ;;
+        4)
             $PY_CMD build.py all
             read -p "İşlem tamamlandı! Devam etmek için Enter tuşuna basın..."
             show_menu

@@ -37,6 +37,10 @@ _ACTIVE_PROCS_LOCK = threading.Lock()
 _ACTIVE_PROCS: dict[str, list["subprocess.Popen"]] = {}   # uid -> list of procs
 
 
+_GDL_INFO_CACHE_LOCK = threading.Lock()
+_GDL_INFO_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
 def _register_proc(uid: str, proc: "subprocess.Popen") -> None:
     with _ACTIVE_PROCS_LOCK:
         if uid not in _ACTIVE_PROCS:
@@ -175,9 +179,25 @@ class GalleryDLExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _load_gdl_plugins() -> None:
+        try:
+            import os
+            import gallery_dl.extractor
+            plugins_dir = os.path.join(os.path.dirname(__file__), "gdl_plugins")
+            if os.path.isdir(plugins_dir):
+                files = [f for f in os.listdir(plugins_dir) if f.endswith(".py") and not f.startswith("__")]
+                if hasattr(gallery_dl.extractor, "_modules_path") and hasattr(gallery_dl.extractor, "add_module"):
+                    loaded = gallery_dl.extractor._modules_path(plugins_dir, files)
+                    for mod in loaded:
+                        gallery_dl.extractor.add_module(mod)
+        except Exception:
+            pass
+
+    @staticmethod
     def can_handle(url: str) -> bool:
         if not url:
             return False
+        GalleryDLExtractor._load_gdl_plugins()
         try:
             import gallery_dl.extractor
             result = gallery_dl.extractor.find(url)
@@ -187,6 +207,7 @@ class GalleryDLExtractor(BaseExtractor):
             pass
         url_lower = url.lower()
         if any(domain in url_lower for domain in (
+            "motherless.xxx", "motherless.com", "goonbox.cr", "goonbox.cc",
             "simpcity.cr", "simpcity.su", "danbooru", "gelbooru",
             "e-hentai", "imgur.com", "imgbox.com", "realbooru", "rule34.xxx",
         )):
@@ -266,14 +287,18 @@ class GalleryDLExtractor(BaseExtractor):
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         gdl_config.set(("extractor", "reddit"), "comments", 0)
         gdl_config.set(("extractor", "reddit"), "morecomments", False)
-        gdl_config.set(("extractor",), "sleep-request", 0.5)
-        gdl_config.set(("extractor",), "sleep", 0.3)
+        gdl_config.set(("extractor",), "sleep-request", 0)
+        gdl_config.set(("extractor",), "sleep", 0)
         gdl_config.set(("extractor",), "retries", 3)
         gdl_config.set(("extractor",), "timeout", 15)
         gdl_config.set(("extractor",), "verify", False)
         gdl_config.set(("downloader",), "retries", 3)
         gdl_config.set(("downloader",), "timeout", 15)
-        gdl_config.set(("downloader",), "verify", False)
+        gdl_config.set(("downloader",), "chunk-size", "1M")
+        # Ensure fast retries without backoff
+        gdl_config.set(("downloader",), "retries", 3)
+        gdl_config.set(("downloader", "http"), "chunk-size", "1M")
+        gdl_config.set(("downloader",), "part", True)
         gdl_config.set(("downloader", "http"), "verify", False)
 
         if "gofile.io" in url:
@@ -304,6 +329,11 @@ class GalleryDLExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     def extract_info(self, url: str) -> dict[str, Any]:
+        with _GDL_INFO_CACHE_LOCK:
+            if url in _GDL_INFO_CACHE:
+                ts, cached_data = _GDL_INFO_CACHE[url]
+                if (time.time() - ts) < 600:
+                    return cached_data
         _ensure_thread_local_config()
         try:
             import gallery_dl  # noqa: F401
@@ -315,6 +345,7 @@ class GalleryDLExtractor(BaseExtractor):
         gdl_config.clear()
         self._configure_gdl_base(gdl_config, url)
         self._configure_cookies_and_proxy(gdl_config, url)
+        self._load_gdl_plugins()
 
         extractor = find_extractor(url)
         if extractor is None:
@@ -355,15 +386,18 @@ class GalleryDLExtractor(BaseExtractor):
                             title = file_meta["gallery"]["title"]
                     if isinstance(file_meta, dict):
                         fname = file_meta.get("filename", Path(file_url).stem)
+                        f_ext = file_meta.get("extension", "")
                     else:
                         fname = Path(file_url).stem
+                        f_ext = ""
                     items.append({
                         "title": fname,
                         "url": file_url,
+                        "extension": f_ext,
                         "duration": None,
                         "thumbnail": None,
                     })
-                    if len(items) >= 20 or (time.time() - start_scan) > 5.0:
+                    if len(items) >= 1000 or (time.time() - start_scan) > 15.0:
                         break
                 elif msg_type == MSG_QUEUE:
                     queued_url = msg[1] if len(msg) > 1 else ""
@@ -385,10 +419,11 @@ class GalleryDLExtractor(BaseExtractor):
                         items.append({
                             "title": str(fname) or queued_url,
                             "url": queued_url,
+                            "is_queue_page": True,
                             "duration": None,
                             "thumbnail": None,
                         })
-                    if len(items) >= 20 or (time.time() - start_scan) > 5.0:
+                    if len(items) >= 1000 or (time.time() - start_scan) > 15.0:
                         break
         except Exception as exc:
             last_exc = exc
@@ -417,7 +452,7 @@ class GalleryDLExtractor(BaseExtractor):
             thumb_url = f"https://www.google.com/s2/favicons?domain={parsed.netloc}&sz=128"
         except Exception:
             pass
-        return {
+        res_dict = {
             "title": title or self._title_from_url(url),
             "thumbnail": thumb_url,
             "duration": None,
@@ -426,6 +461,9 @@ class GalleryDLExtractor(BaseExtractor):
             "item_count": len(items),
             "playlist_items": items,
         }
+        with _GDL_INFO_CACHE_LOCK:
+            _GDL_INFO_CACHE[url] = (time.time(), res_dict)
+        return res_dict
 
     # ------------------------------------------------------------------
     # Download — runs gallery-dl in an isolated subprocess per task
@@ -460,10 +498,13 @@ class GalleryDLExtractor(BaseExtractor):
         # ---- Unique temp directory per task ----
         _uid = task_id or uuid.uuid4().hex[:12]
         try:
-            _appdata_local = Path(
-                os.environ.get("LOCALAPPDATA", "") or str(Path.home() / "AppData" / "Local")
-            )
-            temp_base = _appdata_local / "Programs" / "SuyliosDownloader" / "TempDownloads"
+            if os.name == "nt":
+                _appdata_local = Path(
+                    os.environ.get("LOCALAPPDATA", "") or str(Path.home() / "AppData" / "Local")
+                )
+                temp_base = _appdata_local / "Programs" / "SuyliosDownloader" / "TempDownloads"
+            else:
+                temp_base = Path(os.environ.get("TEMP", "/tmp")) / "SuyliosDownloader" / "TempDownloads"
         except Exception:
             temp_base = Path(os.environ.get("TEMP", "/tmp")) / "SuyliosDownloader" / "TempDownloads"
         temp_dir = temp_base / _uid
@@ -472,6 +513,93 @@ class GalleryDLExtractor(BaseExtractor):
         last_file = ""
         downloaded_count = 0
         files_before = set(os.listdir(dest)) if dest.exists() else set()
+
+        # ---- Fast Multi-Connection Range Downloader Check ----
+        # If the URL is from Motherless, Bunkr, Gofile, Pixeldrain, Cyberdrop, or yields direct media files,
+        # use 16 concurrent HTTP Range workers instead of slow single-threaded urllib3
+        if any(k in url.lower() for k in ("motherless.", "bunkr.", "gofile.", "pixeldrain.", "cyberdrop.")):
+            try:
+                info_res = self.extract_info(url)
+                items = info_res.get("playlist_items", []) or []
+                if items:
+                    from src.extractors.fast_downloader import download_file_fast
+                    total_cnt = len(items)
+                    for idx, item in enumerate(items, start=1):
+                        if cancel_event and cancel_event.is_set():
+                            raise ExtractionCancelled("Download cancelled")
+                        file_url = item.get("url", "")
+                        if not file_url or not (file_url.startswith("http://") or file_url.startswith("https://")):
+                            continue
+                        
+                        if item.get("is_queue_page") or ("motherless.xxx/" in file_url.lower() and not re.search(r'\.(mp4|m4v|webm|mov|avi|jpg|jpeg|png|gif)($|\?)', file_url, re.I)):
+                            try:
+                                sub_res = self.extract_info(file_url)
+                                sub_items = sub_res.get("playlist_items", []) or []
+                                if sub_items and sub_items[0].get("url"):
+                                    file_url = sub_items[0]["url"]
+                                    if sub_items[0].get("title") and sub_items[0]["title"] != file_url:
+                                        item["title"] = sub_items[0]["title"]
+                                    if sub_items[0].get("extension"):
+                                        item["extension"] = sub_items[0]["extension"]
+                                else:
+                                    logger.warning("No media URL resolved from sub-page %s, skipping.", file_url)
+                                    continue
+                            except Exception as sub_e:
+                                logger.warning("Could not resolve direct media URL for sub-page %s: %s", file_url, sub_e)
+                                continue
+
+                        f_title = item.get("title", f"video_{idx}")
+                        f_ext = item.get("extension", "")
+                        if not f_ext and "." in file_url.rpartition("/")[-1].rpartition("?")[0]:
+                            f_ext = file_url.rpartition("/")[-1].rpartition("?")[0].rpartition(".")[-1]
+                        if not f_ext:
+                            f_ext = "mp4" if any(w in file_url.lower() for w in ("video", "-videos", ".mp4", ".webm", ".mov")) else "jpg"
+                        
+                        safe_title = re.sub(r'[\\/*?:"<>|]', '_', str(f_title)).strip()
+                        if not safe_title:
+                            safe_title = f"media_{idx}"
+                        out_file = dest / f"{safe_title}.{f_ext}"
+                        if out_file.exists() and out_file.stat().st_size > 1024:
+                            last_file = str(out_file)
+                            continue
+                        
+                        disp_name = f"{safe_title}.{f_ext}"
+                        item_headers = dict(item.get("headers", {}) or item.get("_http_headers", {}) or {})
+                        if "motherless." in url.lower() or "motherlessmedia.com" in file_url.lower():
+                            item_headers["Referer"] = "https://motherless.xxx/"
+                            item_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                        
+                        if progress_hook:
+                            progress_hook({
+                                "status": "downloading",
+                                "filename": disp_name,
+                                "item_index": idx,
+                                "item_count": total_cnt,
+                                "item_title": str(f_title),
+                                "downloaded_bytes": 0,
+                                "total_bytes": 0,
+                                "speed": 0,
+                            })
+                        
+                        download_file_fast(
+                            url=file_url,
+                            target_path=out_file,
+                            headers=item_headers,
+                            progress_hook=progress_hook,
+                            cancel_event=cancel_event,
+                            display_name=disp_name,
+                            item_idx=idx,
+                            item_cnt=total_cnt,
+                            num_workers=32
+                        )
+                        last_file = str(out_file)
+                    
+                    if last_file and Path(last_file).exists():
+                        return last_file
+            except ExtractionCancelled:
+                raise
+            except Exception as e:
+                logger.warning("Direct fast_downloader attempt failed (%s), falling back to subprocess...", e, exc_info=True)
 
         # ---- Build gallery-dl JSON config ----
         try:
@@ -488,18 +616,24 @@ class GalleryDLExtractor(BaseExtractor):
                 "base-directory": str(temp_dir),
                 "directory": [],
                 "filename": "{filename}.{extension}",
-                "sleep-request": 0.5,
-                "sleep": 0.3,
-                "retries": 1,
-                "timeout": 7,
+                "sleep-request": 0,
+                "sleep": 0,
+                "retries": 3,
+                "timeout": 15,
                 "verify": False,
                 "user-agent": UA,
             },
             "downloader": {
-                "retries": 1,
-                "timeout": 7,
+                "retries": 3,
+                "timeout": 15,
                 "verify": False,
                 "user-agent": UA,
+                "chunk-size": "1M",
+                "part": True,
+                "http": {
+                    "verify": False,
+                    "chunk-size": "1M",
+                },
             },
             "output": {"mode": "null"},
         }
@@ -631,7 +765,7 @@ class GalleryDLExtractor(BaseExtractor):
         _speed_lock = threading.Lock()
 
         def _calc_speed() -> float:
-            """Return approximate download speed (bytes/sec) based on last 5s window."""
+            """Return accurate download speed (bytes/sec) based on last 5s window."""
             now = time.monotonic()
             with _speed_lock:
                 # Keep only last 5 seconds
@@ -640,22 +774,41 @@ class GalleryDLExtractor(BaseExtractor):
                     _speed_window.pop(0)
                 if len(_speed_window) < 2:
                     return 0.0
-                total_bytes = sum(b for _, b in _speed_window)
+                delta_bytes = _speed_window[-1][1] - _speed_window[0][1]
                 elapsed = _speed_window[-1][0] - _speed_window[0][0]
-                return total_bytes / elapsed if elapsed > 0 else 0.0
+                return max(0.0, delta_bytes / elapsed) if elapsed > 0 else 0.0
+
+        known_cnt = getattr(progress_hook, "_task", None) and getattr(progress_hook._task, "item_count", -1) or -1
+        if not known_cnt or int(known_cnt) <= 1:
+            known_cnt = -1
+        else:
+            known_cnt = int(known_cnt)
 
         def _move_new_files() -> None:
             nonlocal downloaded_count, last_file
+            total_moved_bytes = 0
             while not _watcher_stop.is_set():
                 try:
                     if temp_dir.exists():
+                        active_bytes = 0
+                        active_filename = ""
                         for f in list(temp_dir.rglob("*")):
                             if not f.is_file():
                                 continue
-                            key = str(f)
+                            key = str(f.resolve())
+                            # Track files still being written for live speed & progress
+                            if f.suffix.lower() in (".part", ".tmp", ".ytdl", ".download") or key not in _known_in_temp:
+                                try:
+                                    fsize = f.stat().st_size
+                                    if fsize > 0:
+                                        active_bytes += fsize
+                                        if not active_filename:
+                                            active_filename = f.stem if f.suffix.lower() in (".part", ".tmp", ".ytdl", ".download") else f.name
+                                except Exception:
+                                    pass
+
                             if key in _known_in_temp:
                                 continue
-                            # Skip files still being written
                             if f.suffix.lower() in (".part", ".tmp", ".ytdl", ".download"):
                                 continue
                             
@@ -679,19 +832,19 @@ class GalleryDLExtractor(BaseExtractor):
                                 shutil.move(str(f), str(dst))
                                 last_file = str(dst)
                                 downloaded_count += 1
-                                # Record bytes for speed calculation
                                 if file_size > 0:
+                                    total_moved_bytes += file_size
                                     with _speed_lock:
-                                        _speed_window.append((time.monotonic(), file_size))
+                                        _speed_window.append((time.monotonic(), total_moved_bytes))
                                 logger.debug("Watcher moved: %s -> %s", f.name, dst)
                                 if progress_hook:
                                     try:
                                         progress_hook({
                                             "status": "finished",
-                                            "filename": str(dst),
+                                            "filename": str(dst.name),
                                             "file_size": file_size,
                                             "item_index": downloaded_count,
-                                            "item_count": -1,  # -1 = unknown total, show counter only
+                                            "item_count": known_cnt,
                                             "speed": _calc_speed(),
                                         })
                                     except Exception:
@@ -699,6 +852,23 @@ class GalleryDLExtractor(BaseExtractor):
                             except Exception as mv_err:
                                 logger.debug("Watcher move failed (retry next tick): %s", mv_err)
                                 _known_in_temp.discard(key)
+
+                        if active_bytes > 0 and progress_hook:
+                            with _speed_lock:
+                                _speed_window.append((time.monotonic(), total_moved_bytes + active_bytes))
+                            try:
+                                payload = {
+                                    "status": "downloading",
+                                    "downloaded_bytes": total_moved_bytes + active_bytes,
+                                    "speed": _calc_speed(),
+                                    "item_index": downloaded_count + 1 if known_cnt > 1 else downloaded_count,
+                                    "item_count": known_cnt,
+                                }
+                                if active_filename:
+                                    payload["filename"] = active_filename
+                                progress_hook(payload)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 _watcher_stop.wait(0.4)
@@ -772,12 +942,21 @@ class GalleryDLExtractor(BaseExtractor):
                         logger.debug("gdl[%s]: %s", _uid[:8], line)
                         if progress_hook and (line.startswith("#") or "downloading " in line.lower()):
                             try:
-                                progress_hook({
+                                payload = {
                                     "status": "downloading",
-                                    "item_index": downloaded_count,
-                                    "item_count": -1,
+                                    "item_index": downloaded_count + 1 if known_cnt > 1 else downloaded_count,
+                                    "item_count": known_cnt,
                                     "speed": _calc_speed(),
-                                })
+                                }
+                                m_idx = re.search(r'\[\s*(\d+)\s*/\s*(\d+)\s*\]', line)
+                                if m_idx:
+                                    payload["item_index"] = int(m_idx.group(1))
+                                    payload["item_count"] = int(m_idx.group(2))
+                                elif line.startswith("# ") and ("/" in line or "." in line):
+                                    fname = line[2:].strip().split()[0].rpartition("/")[-1].rpartition("?")[0]
+                                    if fname and "." in fname:
+                                        payload["filename"] = fname
+                                progress_hook(payload)
                             except Exception:
                                 pass
                     if cancel_event.is_set():

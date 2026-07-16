@@ -772,9 +772,10 @@ class DownloadManager:
                         task.item_index = int(idx)
                         task.item_count = int(cnt)
                     elif idx and int(cnt) == -1:
-                        # Unknown total: just track how many files were downloaded, don't set item_count
+                        # Unknown total: just track how many files were downloaded, don't set item_count to 0 if already known
                         task.item_index = int(idx)
-                        task.item_count = 0  # 0 = hide the X/Y counter chip, show plain count elsewhere
+                        if not task.item_count or task.item_count <= 1:
+                            task.item_count = 0  # 0 = hide the X/Y counter chip, show plain count elsewhere
                     if data.get("item_title"):
                         task.title = data["item_title"]
 
@@ -791,6 +792,10 @@ class DownloadManager:
                             task.progress = min(int(downloaded) / int(total) * 100, 100.0)
                         elif data.get("fragment_count", 0) > 0:
                             task.progress = min(data.get("fragment_index", 0) / data.get("fragment_count") * 100, 100.0)
+                        elif downloaded > 0 and (not total or total <= 0):
+                            # Smoothly estimate progress based on downloaded megabytes when total size is unknown
+                            mb = downloaded / (1024.0 * 1024.0)
+                            task.progress = min(92.0, max(task.progress or 0.0, 5.0 + (mb / (mb + 40.0)) * 85.0))
                         if data.get("speed") is not None and float(data.get("speed", 0)) > 0:
                             task.speed = float(data["speed"])
                         if data.get("eta") is not None and int(data.get("eta", 0)) > 0:
@@ -871,6 +876,7 @@ class DownloadManager:
                     time.sleep(0.3)
 
                 try:
+                    setattr(_progress_hook, "_task", task)
                     result_path = extractor.download(
                         url=task.url,
                         output_path=dl_dir,

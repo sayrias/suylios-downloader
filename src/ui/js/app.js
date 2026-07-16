@@ -907,14 +907,22 @@
       rawTitle = rawTitle.split(/[/\\]/).pop();
     }
     const isComplete = dl.status === 'complete' || dl.status === 'completed';
+    let activeFile = '';
+    if (dl.filename) {
+      activeFile = dl.filename.split(/[/\\]/).pop();
+    }
+    let displayTitle = rawTitle;
+    if (activeFile && activeFile !== rawTitle && activeFile !== 'Download' && !isComplete) {
+      displayTitle = `${rawTitle} — <span style="color:var(--text-secondary); font-size:13px; font-weight:500;">${escapeHtml(activeFile)}</span>`;
+    } else if (!isComplete) {
+      displayTitle = escapeHtml(rawTitle);
+    }
     if (dl.item_count && dl.item_count > 1 && !isComplete && dl.item_index > 0) {
       const idx = dl.item_index;
-      const displayTitle = rawTitle;
-      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${idx}/${dl.item_count}</span><span style="vertical-align: middle;">${escapeHtml(displayTitle)}</span>`;
+      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${idx}/${dl.item_count}</span><span style="vertical-align: middle;">${displayTitle}</span>`;
     } else if (!dl.item_count && dl.item_index > 0 && !isComplete) {
       // Gallery/watcher mode: unknown total, show just downloaded count
-      const displayTitle = rawTitle;
-      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${escapeHtml(displayTitle)}</span>`;
+      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${displayTitle}</span>`;
     } else if (dl.item_count && dl.item_count > 1 && isComplete) {
       // Completed playlist/archive — show title + total count chip
       title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_count} öğe</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
@@ -940,7 +948,13 @@
     const progress = Math.min(100, Math.max(0, dl.progress || 0));
     progressFill.style.width = progress + '%';
     progressGlow.style.width = progress + '%';
-    progressPercent.textContent = Math.round(progress) + '%';
+    if (progress > 0 || (dl.total_size && dl.total_size > 0)) {
+      progressPercent.textContent = Math.round(progress) + '%';
+    } else if (dl.downloaded_size && dl.downloaded_size > 0 && dl.status === 'downloading') {
+      progressPercent.textContent = '⏳ (~%)';
+    } else {
+      progressPercent.textContent = Math.round(progress) + '%';
+    }
     const lang = window.CURRENT_LANG || 'tr';
     const completedText = lang === 'en' ? 'Completed' : 'Tamamlandı';
 
@@ -1418,7 +1432,7 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.1');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.2');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';

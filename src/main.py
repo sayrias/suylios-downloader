@@ -158,7 +158,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -298,31 +298,37 @@ class Bridge:
         return {"ok": success}
 
     def show_desktop_notification(self, title: str, message: str) -> dict[str, Any]:
-        """Show a native Windows desktop notification with custom app name."""
+        """Show a native desktop notification (Windows PowerShell or Linux notify-send)."""
         try:
-            t_esc = str(title).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
-            m_esc = str(message).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
-            ps = f"""
-            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-            [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+            if os.name == "nt":
+                t_esc = str(title).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
+                m_esc = str(message).replace("'", "''").replace("<", "&lt;").replace(">", "&gt;")
+                ps = f"""
+                [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+                [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+                [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
-            $template = @"
-            <toast>
-                <visual>
-                    <binding template='ToastGeneric'>
-                        <text>{t_esc}</text>
-                        <text>{m_esc}</text>
-                    </binding>
-                </visual>
-            </toast>
+                $template = @"
+                <toast>
+                    <visual>
+                        <binding template='ToastGeneric'>
+                            <text>{t_esc}</text>
+                            <text>{m_esc}</text>
+                        </binding>
+                    </visual>
+                </toast>
 "@
-            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-            $xml.LoadXml($template)
-            $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Suylios Downloader").Show($toast)
-            """
-            subprocess.Popen(["powershell", "-NoProfile", "-Command", ps], creationflags=subprocess.CREATE_NO_WINDOW)
+                $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+                $xml.LoadXml($template)
+                $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+                [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Suylios Downloader").Show($toast)
+                """
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", ps], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            else:
+                try:
+                    subprocess.Popen(["notify-send", "-a", "Suylios Downloader", title, message])
+                except Exception:
+                    pass
             return {"ok": True}
         except Exception as exc:
             logger.error("Failed to show notification: %s", exc)
@@ -625,18 +631,7 @@ class Bridge:
     def get_clipboard_text(self) -> str:
         """Read the current clipboard text (best-effort)."""
         try:
-            import tkinter as tk
-            root = tk.Tk()
-            root.withdraw()
-            text = root.clipboard_get()
-            root.destroy()
-            if text:
-                return str(text)
-        except Exception:
-            pass
-
-        try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import ctypes
                 import time
                 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
@@ -666,13 +661,24 @@ class Bridge:
                     return ""
                 finally:
                     user32.CloseClipboard()
-            else:
+            elif sys.platform == "darwin":
                 result = subprocess.run(
-                    ["xclip", "-selection", "clipboard", "-o"],
-                    capture_output=True, text=True, timeout=3,
+                    ["pbpaste"], capture_output=True, text=True, timeout=3
                 )
                 return result.stdout if result.returncode == 0 else ""
-        except Exception:
+            else:
+                for cmd in [["wl-paste"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]]:
+                    try:
+                        result = subprocess.run(
+                            cmd, capture_output=True, text=True, timeout=3
+                        )
+                        if result.returncode == 0 and result.stdout:
+                            return result.stdout
+                    except Exception:
+                        pass
+                return ""
+        except Exception as exc:
+            logger.debug("Clipboard read error: %s", exc)
             return ""
 
     def pick_folder(self) -> str:
@@ -714,6 +720,8 @@ class Bridge:
 
     def _get_work_area(self) -> tuple[int, int, int, int]:
         """Get monitor working area excluding Windows taskbar."""
+        if sys.platform != "win32":
+            return 0, 0, 1920, 1040
         try:
             import ctypes
             user32 = ctypes.windll.user32  # type: ignore
@@ -1032,26 +1040,32 @@ class Bridge:
     def run_system_command(self, command: str) -> dict[str, Any]:
         """Execute a system-level power command: shutdown_init, shutdown_abort, sleep."""
         try:
+            cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             if command == "shutdown_init":
-                # Schedules shutdown in 60 seconds
-                subprocess.Popen(
-                    ["shutdown", "/s", "/t", "60", "/c", "Suylios Downloader: downloads complete."],
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
+                if os.name == "nt":
+                    subprocess.Popen(
+                        ["shutdown", "/s", "/t", "60", "/c", "Suylios Downloader: downloads complete."],
+                        creationflags=cflags,
+                    )
+                else:
+                    subprocess.Popen(["shutdown", "+1", "Suylios Downloader: downloads complete."])
                 logger.info("System shutdown scheduled in 60 seconds.")
                 return {"ok": True}
             elif command == "shutdown_abort":
-                subprocess.Popen(
-                    ["shutdown", "/a"],
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
+                if os.name == "nt":
+                    subprocess.Popen(["shutdown", "/a"], creationflags=cflags)
+                else:
+                    subprocess.Popen(["shutdown", "-c"])
                 logger.info("System shutdown aborted.")
                 return {"ok": True}
             elif command == "sleep":
-                subprocess.Popen(
-                    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
+                if os.name == "nt":
+                    subprocess.Popen(
+                        ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                        creationflags=cflags,
+                    )
+                else:
+                    subprocess.Popen(["systemctl", "suspend"])
                 logger.info("System sleep triggered.")
                 return {"ok": True}
             else:
@@ -1161,9 +1175,10 @@ class Bridge:
                 zip_path.unlink(missing_ok=True)
                 
                 current_exe = sys.executable if getattr(sys, "frozen", False) else ""
-                if not current_exe or not current_exe.endswith(".exe"):
+                if not current_exe or not current_exe.endswith(".exe") or sys.platform != "win32":
                     _send_progress(100, "done")
-                    os.startfile(str(upd_dir))
+                    if sys.platform == "win32" and hasattr(os, "startfile"):
+                        os.startfile(str(upd_dir))  # type: ignore
                     return
 
                 app_dir = Path(current_exe).parent
@@ -1309,10 +1324,16 @@ def _create_tray_icon(bridge) -> None:
             bridge.force_quit()
             icon.stop()
 
+        def _get_open_label(item):
+            return "Suylios'u Aç" if config.get("language", "tr") == "tr" else "Open Suylios"
+
+        def _get_exit_label(item):
+            return "Çıkış" if config.get("language", "tr") == "tr" else "Exit"
+
         menu = pystray.Menu(
-            pystray.MenuItem("Open Suylios", _show_window, default=True),
+            pystray.MenuItem(_get_open_label, _show_window, default=True),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", _quit_app),
+            pystray.MenuItem(_get_exit_label, _quit_app),
         )
 
         tray = pystray.Icon("suylios", img, f"{APP_NAME}", menu)
@@ -1410,9 +1431,106 @@ def _ensure_single_instance(bridge_holder: Optional[Any] = None) -> None:
         t.start()
 
 
+def _ensure_pywebview_webchannel() -> None:
+    """Ensure pywebview on Linux QtWebEngine can load qwebchannel.js and robustly connect QWebChannel over IPC."""
+    if sys.platform != "linux":
+        return
+    try:
+        import webview.platforms.qt as qt_platform
+        import webview.util as wv_util
+
+        old_load_js_files = getattr(wv_util, "load_js_files", None)
+        if old_load_js_files and not getattr(old_load_js_files, "_is_patched", False):
+            def patched_load_js_files(window, platform):
+                js_code, finish_script = old_load_js_files(window, platform)
+                if platform == "qtwebengine":
+                    robust_finish = (
+                        "window.pywebview._createApi(JSON.parse('%(functions)s'));\n"
+                        "if (window.pywebview.platform == 'qtwebengine') {\n"
+                        "  var _connectWebChannel = function() {\n"
+                        "    if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined' && qt.webChannelTransport) {\n"
+                        "      new QWebChannel(qt.webChannelTransport, function(channel) {\n"
+                        "          window.pywebview._QWebChannel = channel;\n"
+                        "          window.dispatchEvent(new CustomEvent('pywebviewready'));\n"
+                        "      });\n"
+                        "    } else {\n"
+                        "      setTimeout(_connectWebChannel, 20);\n"
+                        "    }\n"
+                        "  };\n"
+                        "  _connectWebChannel();\n"
+                        "} else {\n"
+                        "  window.dispatchEvent(new CustomEvent('pywebviewready'));\n"
+                        "}\n"
+                    )
+                    finish_script = robust_finish
+                    fragile_api = "if (!window.pywebview._QWebChannel) {\n          setTimeout(function () {\n            window.pywebview._QWebChannel.objects.external.call("
+                    if fragile_api in js_code:
+                        js_code = js_code.replace(
+                            fragile_api,
+                            "var _callWebEngine = function() { if (window.pywebview._QWebChannel && window.pywebview._QWebChannel.objects && window.pywebview._QWebChannel.objects.external) { window.pywebview._QWebChannel.objects.external.call("
+                        )
+                        js_code = js_code.replace("}, 100);\n        } else {\n          window.pywebview._QWebChannel.objects.external.call(\n            funcName,\n            pywebview.stringify(params),\n            id\n          );\n        }", "} else { setTimeout(_callWebEngine, 30); } }; _callWebEngine();")
+                return js_code, finish_script
+            patched_load_js_files._is_patched = True
+            wv_util.load_js_files = patched_load_js_files
+
+        old_set_js_api = getattr(qt_platform.BrowserView, "_set_js_api", None)
+        if not old_set_js_api:
+            return
+
+        def patched_set_js_api(self):
+            try:
+                from PyQt6 import QtCore
+                is_webengine = getattr(qt_platform, "is_webengine", True)
+                if is_webengine:
+                    source = None
+                    qwebchannel_js = QtCore.QFile('://qtwebchannel/qwebchannel.js')
+                    if qwebchannel_js.open(QtCore.QFile.OpenModeFlag.ReadOnly if hasattr(QtCore.QFile, "OpenModeFlag") else QtCore.QFile.ReadOnly): # type: ignore
+                        source = bytes(qwebchannel_js.readAll()).decode('utf-8')
+                        qwebchannel_js.close()
+                    if not source:
+                        for path in ('/usr/share/qt6/webchannel/qwebchannel.js', '/usr/share/qt/webchannel/qwebchannel.js', '/usr/share/qt5/webchannel/qwebchannel.js'):
+                            if os.path.exists(path):
+                                try:
+                                    with open(path, 'r', encoding='utf-8') as f:
+                                        source = f.read()
+                                    break
+                                except Exception:
+                                    pass
+                    if source:
+                        _window = self.js_bridge.window
+                        _channel = self.channel
+                        _js_bridge = self.js_bridge
+                        def _after_qwebchannel_loaded(_result=None):
+                            _channel.registerObject('external', _js_bridge)
+                            qt_platform.inject_pywebview(getattr(qt_platform, "renderer", "qt"), _window)
+                        try:
+                            self.webview.page().runJavaScript(source, 0, _after_qwebchannel_loaded)
+                        except TypeError:
+                            self.webview.page().runJavaScript(source, _after_qwebchannel_loaded)
+                        return
+                    else:
+                        qt_platform.inject_pywebview(getattr(qt_platform, "renderer", "qt"), self.js_bridge.window)
+                else:
+                    frame = self.webview.page().mainFrame()
+                    frame.addToJavaScriptWindowObject('external', self.js_bridge)
+                    qt_platform.inject_pywebview(getattr(qt_platform, "renderer", "qt"), self.js_bridge.window)
+            except Exception as e:
+                logger.error("patched_set_js_api error: %s", e)
+                if old_set_js_api:
+                    old_set_js_api(self)
+
+
+        qt_platform.BrowserView._set_js_api = patched_set_js_api
+        logger.info("Applied pywebview QtWebChannel runtime patch for Linux.")
+    except Exception as exc:
+        logger.debug("Could not apply pywebview QtWebChannel patch: %s", exc)
+
+
 def main() -> None:
     """Launch the Suylios Downloader application."""
     _ensure_single_instance(bridge_holder=None)
+    _ensure_pywebview_webchannel()
     logger.info("%s v%s starting …", APP_NAME, APP_VERSION)
     logger.info("Portable mode: %s", config.is_portable())
     logger.info("Download directory: %s", config.get_download_dir())
@@ -1437,7 +1555,7 @@ def main() -> None:
         url = os.environ["SUYLIOS_DEV_URL"]
         logger.info("Using dev URL: %s", url)
     elif Path(ui_path).is_file():
-        url = f"file:///{ui_path.replace(os.sep, '/')}"
+        url = ui_path
     else:
         url = "data:text/html,<h1>Suylios Downloader</h1><p>UI files not found.</p>"
 
@@ -1451,7 +1569,7 @@ def main() -> None:
         frameless=True,
         easy_drag=False,
         text_select=False,
-        hidden=True,
+        hidden=config.get("start_minimized", False),
     )
     bridge.set_window(window)
     _ensure_single_instance(bridge_holder=bridge)

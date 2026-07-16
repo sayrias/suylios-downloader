@@ -47,7 +47,7 @@ def get_ffmpeg_version(path: Optional[str] = None) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout.splitlines()[0].strip()
@@ -83,7 +83,7 @@ def get_hardware_accel() -> str:
             capture_output=True,
             text=True,
             timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
         output = result.stdout if result.returncode == 0 else ""
     except (subprocess.SubprocessError, OSError):

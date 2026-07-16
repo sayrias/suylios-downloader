@@ -603,29 +603,16 @@ class BunkrExtractor(BaseExtractor):
                 if resp.status_code != 200 and resp.status_code != 206:
                     resp.raise_for_status()
 
-                total = int(resp.headers.get("content-length", 0))
-                downloaded = 0
-                start_ts = time.monotonic()
-
-                with open(dest, "wb") as fp:
-                    for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
-                        if not chunk:
-                            continue
-                        fp.write(chunk)
-                        downloaded += len(chunk)
-
-                        if progress_hook:
-                            elapsed = time.monotonic() - start_ts
-                            speed = downloaded / elapsed if elapsed > 0 else 0
-                            eta = int((total - downloaded) / speed) if speed > 0 and total > 0 else 0
-                            progress_hook({
-                                "status": "downloading",
-                                "downloaded_bytes": downloaded,
-                                "total_bytes": total,
-                                "speed": speed,
-                                "eta": eta,
-                                "filename": str(dest),
-                            })
+                resp.close()
+                from src.extractors.fast_downloader import download_file_fast
+                download_file_fast(
+                    url=url,
+                    target_path=dest,
+                    headers=headers,
+                    progress_hook=progress_hook,
+                    display_name=str(dest.name),
+                    num_workers=16,
+                )
                 return  # success
 
             except (requests.RequestException, IOError, Exception) as exc:

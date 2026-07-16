@@ -200,29 +200,14 @@ class PixeldrainExtractor(BaseExtractor):
         progress_hook: Optional[Callable[[dict[str, Any]], None]],
     ) -> None:
         """Chunked streaming download with progress reporting."""
-        with requests.get(url, stream=True, timeout=60) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0)) or total_size
-            downloaded = 0
-            start_ts = time.monotonic()
-
-            with open(dest, "wb") as fp:
-                for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
-                    fp.write(chunk)
-                    downloaded += len(chunk)
-
-                    if progress_hook:
-                        elapsed = time.monotonic() - start_ts
-                        speed = downloaded / elapsed if elapsed > 0 else 0
-                        eta = int((total - downloaded) / speed) if speed > 0 else 0
-                        progress_hook({
-                            "status": "downloading",
-                            "downloaded_bytes": downloaded,
-                            "total_bytes": total,
-                            "speed": speed,
-                            "eta": eta,
-                            "filename": str(dest),
-                        })
+        from src.extractors.fast_downloader import download_file_fast
+        download_file_fast(
+            url=url,
+            target_path=dest,
+            progress_hook=progress_hook,
+            display_name=str(dest.name),
+            num_workers=16,
+        )
 
         if progress_hook:
             progress_hook({
