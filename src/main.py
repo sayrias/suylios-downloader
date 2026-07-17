@@ -17,6 +17,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
+import multiprocessing
+multiprocessing.freeze_support()
 
 # ---------------------------------------------------------------------------
 # Ensure `from src.*` imports work when running as `python src/main.py`
@@ -47,12 +49,15 @@ except ImportError:
         _main_script = str(Path(__file__).resolve())
         sys.exit(subprocess.call([str(_venv_py), _main_script, *sys.argv[1:]]))
     else:
-        print("📦 'pywebview' eksik! Otomatik yükleniyor...")
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(Path(_project_root) / "requirements.txt")], check=True)
-        except subprocess.CalledProcessError:
-            print("⚠️ PEP 668 koruması algılandı, --break-system-packages ile yükleniyor...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", str(Path(_project_root) / "requirements.txt")], check=True)
+        print("📦 'pywebview' veya bağımlılıklar eksik! Akıllı modla yükleniyor (--prefer-binary)...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--only-binary", ":all:", "Pillow"], check=False)
+        cmd = [sys.executable, "-m", "pip", "install", "--prefer-binary", "-r", str(Path(_project_root) / "requirements.txt")]
+        if subprocess.run(cmd).returncode != 0:
+            print("⚠️ Python 3.14 Pillow/C derleme çakışması algılandı, doğrudan hazır paketlerle kuruluyor...")
+            core_pkgs = ["pywebview", "yt-dlp", "gallery-dl", "requests", "aiohttp", "beautifulsoup4", "lxml", "curl_cffi", "pystray", "olefile", "zstandard"]
+            if os.name == "nt": core_pkgs.append("pythonnet")
+            subprocess.run([sys.executable, "-m", "pip", "install", "--prefer-binary", *core_pkgs], check=False)
+            subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "cyberdrop-dl"], check=False)
         import webview
 
 from src.config import config
@@ -1644,6 +1649,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    import multiprocessing
-    multiprocessing.freeze_support()
     main()

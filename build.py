@@ -30,11 +30,18 @@ DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 BIN_DIR = PROJECT_ROOT / "bin"
 
+def _get_app_version() -> str:
+    try:
+        text = (SRC_DIR / "main.py").read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.strip().startswith("APP_VERSION ="):
+                return line.split("=")[1].strip().strip('"\'')
+    except Exception:
+        pass
+    return "1.4.2"
+
 APP_NAME = "Suylios Downloader"
-try:
-    from src.main import APP_VERSION
-except Exception:
-    APP_VERSION = "1.4.2"
+APP_VERSION = _get_app_version()
 APP_PUBLISHER = "Suylios"
 APP_URL = "https://github.com/sayrias/suylios-downloader"
 APP_EXE = "suylios.exe"
@@ -139,6 +146,35 @@ def ensure_pyinstaller():
     except ImportError:
         print("[*] PyInstaller yükleniyor...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
+
+    try:
+        import webview, yt_dlp, gallery_dl, cyberdrop_dl
+        if os.name == "nt":
+            import pythonnet
+    except Exception:
+        print("[*] Eksik Python kütüphaneleri algılandı. Python 3.14 / Pillow C-derleme çakışması önlenerek yükleniyor...")
+        # 1. Öncelikle hazır Pillow ikili dosyasını (--only-binary) kur ki C derlemesi (zlib hatası) tetiklenmesin
+        subprocess.run([sys.executable, "-m", "pip", "install", "--only-binary", ":all:", "Pillow"], check=False)
+        
+        # 2. Standart requirements.txt kurmayı dene
+        cmd = [sys.executable, "-m", "pip", "install", "--prefer-binary", "-r", str(PROJECT_ROOT / "requirements.txt")]
+        res = subprocess.run(cmd)
+        
+        # 3. Eğer Python 3.14 üzerinde cyberdrop-dl'in pillow<11 şartı yüzünden C derlemesi hata verirse:
+        if res.returncode != 0:
+            print("[*] Akıllı Kurulum Devrede: Python 3.14 Pillow kaynak kod hatası atlanıyor, tüm paketler (--prefer-binary) ve cyberdrop-dl (--no-deps) ile güvenle yükleniyor...")
+            core_pkgs = [
+                "pywebview", "yt-dlp", "gallery-dl", "requests", "aiohttp", "beautifulsoup4", "lxml",
+                "curl_cffi", "pystray", "olefile", "zstandard", "aiofiles==0.8.0", "aiolimiter<2.0.0,>=1.1.0",
+                "aiosqlite==0.17.0", "asyncpraw<8.0.0,>=7.7.1", "browser-cookie3<0.20.0,>=0.19.1",
+                "certifi<2025.0.0,>=2024.2.2", "filedate<4.0,>=3.0", "get-video-properties<0.2.0,>=0.1.1",
+                "inquirerpy<0.4.0,>=0.3.4", "mediafire<0.7.0,>=0.6.1", "mutagen<2.0.0,>=1.47.0",
+                "myjdapi<2.0.0,>=1.1.7", "platformdirs<5.0.0,>=4.2.2", "pyyaml<7.0.0,>=6.0.1", "rich<14.0.0,>=13.7.0"
+            ]
+            if os.name == "nt":
+                core_pkgs.append("pythonnet")
+            subprocess.run([sys.executable, "-m", "pip", "install", "--prefer-binary", *core_pkgs], check=False)
+            subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "cyberdrop-dl"], check=False)
 
 
 def build_onedir() -> Path:
