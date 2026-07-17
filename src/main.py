@@ -28,6 +28,17 @@ if _project_root not in sys.path:
 try:
     import webview
 except ImportError:
+    if getattr(sys, "frozen", False):
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Eksik Bileşen / Critical Error", "pywebview veya GUI motoru yüklenemedi. Lütfen uygulamayı yeniden kurun veya eksik DLL'leri kontrol edin.")
+        except Exception:
+            print("CRITICAL: pywebview module or its GUI dependencies are missing in frozen build.")
+        sys.exit(1)
+
     _venv_win = Path(_project_root) / "venv" / "Scripts" / "python.exe"
     _venv_unix = Path(_project_root) / "venv" / "bin" / "python"
     _venv_py = _venv_win if _venv_win.is_file() else (_venv_unix if _venv_unix.is_file() else None)
@@ -1633,4 +1644,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()
