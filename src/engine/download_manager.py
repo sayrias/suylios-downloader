@@ -204,6 +204,7 @@ def _get_extractor(url: str):
     from src.extractors.pixeldrain import PixeldrainExtractor
     from src.extractors.gofile import GofileExtractor
     from src.extractors.bunkr import BunkrExtractor
+    from src.extractors.video_host_ext import VideoHostExtractor
     from src.extractors.reddit_ext import RedditExtractor
     from src.extractors.gallery_ext import GalleryDLExtractor
     from src.extractors.ytdlp_ext import YtdlpExtractor
@@ -226,6 +227,7 @@ def _get_extractor(url: str):
         GofileExtractor,
         BunkrExtractor,
         PixeldrainExtractor,
+        VideoHostExtractor,
         GalleryDLExtractor,
         CyberdropDLExtractor,
         YtdlpExtractor,
@@ -574,13 +576,14 @@ class DownloadManager:
                     from src.extractors.gofile import GofileExtractor
                     from src.extractors.bunkr import BunkrExtractor
                     from src.extractors.pixeldrain import PixeldrainExtractor
+                    from src.extractors.video_host_ext import VideoHostExtractor
                     from src.extractors.gallery_ext import GalleryDLExtractor
                     from src.extractors.cyberdrop_ext import CyberdropDLExtractor
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
                     if "gofile.io" not in task.url.lower():
-                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
+                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
                         if YtdlpExtractor not in tried_extractors and YtdlpExtractor not in fallback_classes:
@@ -895,13 +898,14 @@ class DownloadManager:
                     from src.extractors.gofile import GofileExtractor
                     from src.extractors.bunkr import BunkrExtractor
                     from src.extractors.pixeldrain import PixeldrainExtractor
+                    from src.extractors.video_host_ext import VideoHostExtractor
                     from src.extractors.gallery_ext import GalleryDLExtractor
                     from src.extractors.cyberdrop_ext import CyberdropDLExtractor
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
                     if "gofile.io" not in task.url.lower():
-                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
+                        for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
                         if YtdlpExtractor not in tried_extractors and YtdlpExtractor not in fallback_classes:
