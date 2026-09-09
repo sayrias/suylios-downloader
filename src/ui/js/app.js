@@ -286,6 +286,21 @@
     // Start polling downloads
     startDownloadPolling();
     startClipboardMonitor();
+  // Pano izleme toggle'i değiştiğinde Anında İndir satırını göster/gizle
+  const clipMonitorEl = $('#setting-clipboard-monitor');
+  if (clipMonitorEl) {
+    clipMonitorEl.addEventListener('change', function() {
+      const subRow = $('#clipboard-auto-download-row');
+      if (subRow) subRow.style.display = this.checked ? '' : 'none';
+      if (!this.checked) {
+        const autoEl = $('#setting-clipboard-auto-download');
+        if (autoEl) autoEl.checked = false;
+      }
+    });
+    // İlk yükleme görünürlük
+    const subRow = $('#clipboard-auto-download-row');
+    if (subRow) subRow.style.display = clipMonitorEl.checked ? '' : 'none';
+  }
     setTimeout(() => checkForUpdates(false), 3000);
     $('#btn-manual-check-update')?.addEventListener('click', () => checkForUpdates(true));
   }
@@ -652,7 +667,14 @@
           if (dom.urlInput && dom.urlInput.value !== cleaned) {
             dom.urlInput.value = cleaned;
             flashUrlBar();
-            showClipboardBanner(cleaned);
+            const autoDownloadEl = $('#setting-clipboard-auto-download');
+            const autoDownloadRowVisible = $('#clipboard-auto-download-row')?.style.display !== 'none';
+            const autoDownload = autoDownloadRowVisible && (autoDownloadEl?.checked === true) && (state.settings?.clipboard_auto_download === true);
+            if (autoDownload) {
+              startDownload();
+            } else {
+              showClipboardBanner(cleaned);
+            }
           }
         }
       }
@@ -1511,6 +1533,14 @@
     if (settings.clipboard_monitor !== undefined) {
       const el = $('#setting-clipboard-monitor');
       if (el) el.checked = settings.clipboard_monitor;
+      const subRow = $('#clipboard-auto-download-row');
+      if (subRow) subRow.style.display = settings.clipboard_monitor ? '' : 'none';
+    }
+    if (settings.clipboard_auto_download !== undefined) {
+      const el = $('#setting-clipboard-auto-download');
+      if (el) {
+        el.checked = settings.clipboard_auto_download === true;
+      }
     }
     if (settings.auto_start_windows !== undefined) {
       const el = $('#setting-auto-start-windows');
@@ -1647,6 +1677,7 @@
       language: $('#setting-language')?.value || 'tr',
       start_minimized: $('#setting-start-minimized')?.checked || false,
       clipboard_monitor: $('#setting-clipboard-monitor')?.checked ?? true,
+      clipboard_auto_download: $('#setting-clipboard-auto-download')?.checked ?? false,
       auto_start_windows: $('#setting-auto-start-windows')?.checked ?? false,
       background_mode: $('#setting-background-mode')?.checked ?? true,
       embed_metadata: $('#setting-embed-metadata')?.checked ?? true,

@@ -245,6 +245,124 @@ class GofileExtractor(BaseExtractor):
         self._proxy = ""
         logger.debug("Gofile: Proxy bulunamadı, doğrudan bağlantı deneniyor.")
 
+    def _resolve_via_doh(self, hostname: str) -> list[str]:
+        """
+        DNS over HTTPS (DoH) ile hostname'i çöz.
+        ISP'nin DNS bloğunu Google/Cloudflare/Quad9 DoH üzerinden atlatır.
+        """
+        # Hem IPv4 (A=1) hem IPv6 (AAAA=28) için sorgu yap
+        all_ips = []
+        for record_type in ["A", "AAAA"]:
+            doh_endpoints = [
+                f"https://dns.google/resolve?name={hostname}&type={record_type}",
+                f"https://cloudflare-dns.com/dns-query?name={hostname}&type={record_type}",
+                f"https://dns.quad9.net/dns-query?name={hostname}&type={record_type}",
+            ]
+            for endpoint in doh_endpoints:
+                try:
+                    resp = requests.get(
+                        endpoint,
+                        headers={"Accept": "application/dns-json"},
+                        timeout=5,
+                        verify=True,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        ips = [
+                            a["data"]
+                            for a in data.get("Answer", [])
+                            if a.get("type") in (1, 28)
+                        ]
+                        if ips:
+                            all_ips.extend(ips)
+                            break  # Bu record_type için başarılı oldu, diğer endpointleri deneme
+                except Exception as e:
+                    logger.debug("DoH endpoint başarısız (%s): %s", endpoint, e)
+        
+        if all_ips:
+            # IPv6 (içinde : olanları) öne almayı tercih edebiliriz (Cloudflare IPv4 banından kaçınmak için)
+            all_ips.sort(key=lambda ip: ":" not in ip)
+            logger.debug("DoH ile %s çözümlendi: %s", hostname, all_ips)
+            return all_ips
+        return []
+
+    def _fetch_via_cffi_with_doh(self, content_id: str) -> Optional[dict[str, Any]]:
+        """
+        curl_cffi (Chrome TLS taklit) + DoH çözümlenmiş IP üzerinden API çağrısı.
+        
+        ISP'nin DNS engelini DoH ile aşar, Gofile'ın wt token doğrulaması için
+        Chrome TLS parmak izini kullanır.
+        """
+        try:
+            from curl_cffi.requests import Session as CffiSession
+            from curl_cffi import CurlHttpVersion, CurlOpt
+        except ImportError:
+            return None
+
+        ips = self._resolve_via_doh("api.gofile.io")
+        if not ips:
+            return None
+
+        proxies = {}
+        if self._proxy:
+            proxies = {"http": self._proxy, "https": self._proxy}
+
+        # Her IP'yi sırayla dene
+        last_err = None
+        for target_ip in ips:
+            # HTTP sürümlerini dene: HTTP/3 önce (UDP), sonra HTTP/2, HTTP/1.1
+            for ver_name, ver_code in [
+                ("HTTP/3", CurlHttpVersion.V3),
+                ("HTTP/2", CurlHttpVersion.V2TLS),
+                ("HTTP/1.1", CurlHttpVersion.V1_1),
+            ]:
+                try:
+                    with CffiSession(
+                        impersonate="chrome",
+                        proxies=proxies,
+                        # DNS yerine doğrudan IP kullan
+                        curl_options={CurlOpt.RESOLVE: [f"api.gofile.io:443:{target_ip}"]},
+                    ) as s:
+                        native_ua = s.headers.get("User-Agent") or _DEFAULT_HEADERS["User-Agent"]
+                        wt_token = self._compute_wt(self._token, custom_ua=native_ua)
+                        url = f"{_API_BASE}/contents/{content_id}?wt={wt_token}&cache=true"
+                        headers = self._api_headers(custom_ua=native_ua)
+                        cookies = {"wt": wt_token}
+                        if self._token:
+                            cookies["accountToken"] = self._token
+
+                        resp = s.get(
+                            url, headers=headers, cookies=cookies,
+                            timeout=15, http_version=ver_code,
+                        )
+                        data = resp.json()
+                        if data.get("status") == "ok":
+                            logger.debug("DoH+cffi başarılı: IP=%s %s", target_ip, ver_name)
+                            return data.get("data", {})
+                        status = str(data.get("status", ""))
+                        if "notFound" in status:
+                            raise ExtractionError(f"Gofile içerik bulunamadı veya silinmiş: {content_id}")
+                        if "notPremium" in status or "password" in status:
+                            raise ExtractionError("Bu içerik gizli veya premium üyelik gerektiriyor. Lütfen Gofile hesabınızdan aldığınız API Token'ı (accountToken) Ayarlar > Desteklenen Platformlar > Gofile bölümündeki 'Ayarla' butonundan girin.")
+                        if "rateLimit" in status or resp.status_code == 429:
+                            raise _RateLimitError(f"Gofile rate-limit (DoH+cffi): {status}")
+                        if resp.status_code == 401:
+                            # Token geçersiz — yenile ve döngüden çık
+                            logger.debug("DoH+cffi 401 — token yenileniyor")
+                            self._refresh_token()
+                            break
+                        logger.debug("DoH+cffi cevabı (%s %s): %s", target_ip, ver_name, status)
+                except (ExtractionError, _RateLimitError):
+                    raise
+                except Exception as exc:
+                    logger.debug("DoH+cffi başarısız (IP=%s %s): %s", target_ip, ver_name, exc)
+                    last_err = exc
+                    continue
+        if last_err:
+            raise last_err  # type: ignore[misc]
+        return None
+
+
     def _apply_proxy_to_session(self, proxy_url: str) -> None:
         """requests.Session'a proxy uygula."""
         self._session.proxies = {
@@ -416,7 +534,7 @@ class GofileExtractor(BaseExtractor):
         ua = custom_ua or _DEFAULT_HEADERS.get("User-Agent", "")
         lang = _DEFAULT_HEADERS.get("Accept-Language", "").split(",")[0] or "en-US"
         time_slot = str(int(time.time() // 14400))
-        salt = os.getenv("GOFILE_WT_SALT", "9844d94d963d30")
+        salt = os.getenv("GOFILE_WT_SALT", "12af056dacea0b")
         raw = f"{ua}::{lang}::{tok}::{time_slot}::{salt}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -456,9 +574,25 @@ class GofileExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     def _fetch_content_tree(self, content_id: str) -> dict[str, Any]:
-        """İçerik ağacını çek: curl_cffi → requests → (rate-limit retry) → HTML scrape."""
+        """İçerik ağacını çek: DoH bypass → curl_cffi → requests → (rate-limit retry) → HTML scrape."""
         last_exc: Optional[Exception] = None
         import random
+
+        # Katman 0: DoH + curl_cffi Chrome TLS ile ISP engelini atlatarak bağlan
+        # (DNS bloğunu DoH ile, SNI/wt token doğrulamasını Chrome TLS taklitiyle geçer)
+        try:
+            tree = self._fetch_via_cffi_with_doh(content_id)
+            if tree:
+                logger.info("Gofile içeriği DoH+cffi ile çekildi.")
+                return tree
+        except (_RateLimitError, ExtractionError) as exc:
+            if any(x in str(exc).lower() for x in ("premium", "bulunamadı", "şifre")):
+                raise
+            last_exc = exc
+            logger.debug("DoH+cffi başarısız: %s", exc)
+        except Exception as exc:
+            last_exc = exc
+            logger.debug("DoH+cffi başarısız: %s", exc)
 
         for attempt in range(1, 4):
             # Katman 1: curl_cffi (Cloudflare bypass + proxy)
@@ -550,9 +684,13 @@ class GofileExtractor(BaseExtractor):
         ) from last_exc
 
     def _fetch_via_cffi(self, content_id: str) -> Optional[dict[str, Any]]:
-        """curl_cffi Chrome taklit + proxy ile API çağrısı."""
+        """curl_cffi Chrome taklit + HTTP/3 öncelikli API çağrısı.
+        
+        HTTP/3 (QUIC) UDP üzerinde çalışır — ISP'nin TCP tabanlı SNI filtrelerini atlatır.
+        """
         try:
             from curl_cffi.requests import Session as CffiSession
+            from curl_cffi import CurlHttpVersion
         except ImportError:
             return None
 
@@ -560,32 +698,66 @@ class GofileExtractor(BaseExtractor):
         if self._proxy:
             proxies = {"http": self._proxy, "https": self._proxy}
 
-        with CffiSession(impersonate="chrome", proxies=proxies) as s:
-            native_ua = s.headers.get("User-Agent") or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-            wt_token = self._compute_wt(self._token, custom_ua=native_ua)
-            url = f"{_API_BASE}/contents/{content_id}?wt={wt_token}&cache=true"
-            headers = self._api_headers(custom_ua=native_ua)
-            cookies = {"wt": wt_token}
-            if self._token:
-                cookies["accountToken"] = self._token
+        # HTTP sürümlerini öncelik sırasıyla dene: HTTP/3 → HTTP/2 → HTTP/1.1
+        # HTTP/3 (QUIC/UDP) ISP TCP engelini tamamen atlar
+        http_versions = []
+        if not self._proxy:
+            # Proxy yokken HTTP/3 önce (QUIC/UDP - ISP DPI'yi atlar)
+            http_versions = [
+                ("HTTP/3", CurlHttpVersion.V3),
+                ("HTTP/2", CurlHttpVersion.V2TLS),
+                ("HTTP/1.1", CurlHttpVersion.V1_1),
+            ]
+        else:
+            # Proxy varken HTTP/3 çalışmayabilir, önce HTTP/2
+            http_versions = [
+                ("HTTP/2", CurlHttpVersion.V2TLS),
+                ("HTTP/1.1", CurlHttpVersion.V1_1),
+            ]
 
-            resp = s.get(url, headers=headers, cookies=cookies, timeout=15)
-            data = resp.json()
-            if data.get("status") == "ok":
-                return data.get("data", {})
-            status = str(data.get("status", ""))
-            if "notFound" in status:
-                raise ExtractionError(f"Gofile içerik bulunamadı veya silinmiş: {content_id}")
-            if "notPremium" in status or "password" in status:
-                raise ExtractionError("Bu içerik gizli veya premium üyelik gerektiriyor. Lütfen Gofile hesabınızdan aldığınız API Token'ı (accountToken) Ayarlar > Desteklenen Platformlar > Gofile bölümündeki 'Ayarla' butonundan girin.")
-            if "rateLimit" in status or resp.status_code == 429:
-                if "limit exceeded" in resp.text.lower() or "limit exceeded" in status.lower():
-                    if self._rotate_token():
-                        raise _RateLimitError("Gofile API kota aşıldı, sonraki token denenecek...")
-                    raise ExtractionError("Gofile Kota Hatası (HTTP 429): Kullanılan API tokenın (veya klasörün) 1000 GB'lık aylık indirme kotası dolmuştur! ('Monthly download limit exceeded'). Çözüm: Ayarlar > Desteklenen Platformlar > Gofile kısmına kotası dolmamış yeni/başka Gofile API Token(lar)ı ekleyin (birden fazla tokenı alt alta veya virgülle girebilirsiniz).")
-                raise _RateLimitError(f"Gofile rate-limit: {status}")
-            logger.debug("cffi API cevabı: %s", status)
+        last_err = None
+        for ver_name, ver_code in http_versions:
+            try:
+                with CffiSession(impersonate="chrome", proxies=proxies) as s:
+                    native_ua = s.headers.get("User-Agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                    wt_token = self._compute_wt(self._token, custom_ua=native_ua)
+                    url = f"{_API_BASE}/contents/{content_id}?wt={wt_token}&cache=true"
+                    headers = self._api_headers(custom_ua=native_ua)
+                    cookies = {"wt": wt_token}
+                    if self._token:
+                        cookies["accountToken"] = self._token
+
+                    resp = s.get(
+                        url, headers=headers, cookies=cookies,
+                        timeout=15, http_version=ver_code,
+                    )
+                    data = resp.json()
+                    if data.get("status") == "ok":
+                        logger.debug("Gofile API başarılı: %s", ver_name)
+                        return data.get("data", {})
+                    status = str(data.get("status", ""))
+                    if "notFound" in status:
+                        raise ExtractionError(f"Gofile içerik bulunamadı veya silinmiş: {content_id}")
+                    if "notPremium" in status or "password" in status:
+                        raise ExtractionError("Bu içerik gizli veya premium üyelik gerektiriyor. Lütfen Gofile hesabınızdan aldığınız API Token'ı (accountToken) Ayarlar > Desteklenen Platformlar > Gofile bölümündeki 'Ayarla' butonundan girin.")
+                    if "rateLimit" in status or resp.status_code == 429:
+                        if "limit exceeded" in resp.text.lower() or "limit exceeded" in status.lower():
+                            if self._rotate_token():
+                                raise _RateLimitError("Gofile API kota aşıldı, sonraki token denenecek...")
+                            raise ExtractionError("Gofile Kota Hatası (HTTP 429): Kullanılan API tokenın (veya klasörün) 1000 GB'lık aylık indirme kotası dolmuştur! ('Monthly download limit exceeded'). Çözüm: Ayarlar > Desteklenen Platformlar > Gofile kısmına kotası dolmamış yeni/başka Gofile API Token(lar)ı ekleyin (birden fazla tokenı alt alta veya virgülle girebilirsiniz).")
+                        raise _RateLimitError(f"Gofile rate-limit: {status}")
+                    logger.debug("cffi API cevabı (%s): %s", ver_name, status)
+            except (ExtractionError, _RateLimitError):
+                raise
+            except Exception as exc:
+                logger.debug("cffi %s başarısız: %s", ver_name, exc)
+                last_err = exc
+                continue  # Sonraki HTTP versiyonunu dene
+
+        if last_err:
+            raise last_err  # type: ignore[misc]
         return None
+
 
     def _fetch_via_requests(self, content_id: str) -> Optional[dict[str, Any]]:
         """Standart requests + proxy ile API çağrısı."""
@@ -831,10 +1003,13 @@ function fetchUrl(url, headers = {{}}, timeout = 15000) {{
             session_ctx: Any = None
             use_cffi = False
             try:
-                # curl_cffi öncelikli (Cloudflare bypass + proxy)
+                # curl_cffi öncelikli (HTTP/3 QUIC + Cloudflare bypass + proxy)
                 try:
                     from curl_cffi.requests import Session as CffiSession
-                    session_ctx = CffiSession(impersonate="chrome", proxies=proxies)
+                    from curl_cffi import CurlHttpVersion
+                    # Proxy yoksa HTTP/3 (QUIC/UDP) ile ISP TCP engelini atla
+                    http_ver = CurlHttpVersion.V3 if not self._proxy else CurlHttpVersion.V2TLS
+                    session_ctx = CffiSession(impersonate="chrome", proxies=proxies, http_version=http_ver)
                     use_cffi = True
                 except ImportError:
                     session_ctx = self._session
@@ -941,7 +1116,9 @@ function fetchUrl(url, headers = {{}}, timeout = 15000) {{
                 wait = _RETRY_BACKOFF * (2 ** (attempt - 1)) + random.uniform(1.0, 3.0)
                 if "CDN_NEED_AUTH" in str(exc):
                     wait = 0.5
-                logger.warning("Gofile retry %d/%d (%ds): %s", attempt, _MAX_RETRIES, int(wait), exc)
+                    logger.debug("Gofile retry %d/%d (%ds): %s", attempt, _MAX_RETRIES, int(wait), exc)
+                else:
+                    logger.warning("Gofile retry %d/%d (%ds): %s", attempt, _MAX_RETRIES, int(wait), exc)
                 time.sleep(wait)
 
     # ------------------------------------------------------------------

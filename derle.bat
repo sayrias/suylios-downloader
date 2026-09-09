@@ -29,7 +29,7 @@ goto MENU
 
 :BUILD_PORTABLE
 cls
-%PY_CMD% build.py portable
+%PY_CMD% build.py portable 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt"
 echo.
 echo Islem tamamlandi! Devam etmek icin bir tusa basin...
 pause >nul
@@ -37,7 +37,7 @@ goto MENU
 
 :BUILD_SETUP
 cls
-%PY_CMD% build.py setup
+%PY_CMD% build.py setup 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
 echo.
 echo Islem tamamlandi! Devam etmek icin bir tusa basin...
 pause >nul
@@ -45,7 +45,7 @@ goto MENU
 
 :BUILD_TEKDOSYA
 cls
-%PY_CMD% build.py onefile
+%PY_CMD% build.py onefile 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
 echo.
 echo Islem tamamlandi! Devam etmek icin bir tusa basin...
 pause >nul
@@ -53,7 +53,7 @@ goto MENU
 
 :BUILD_ALL
 cls
-%PY_CMD% build.py all
+%PY_CMD% build.py all 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
 echo.
 echo Islem tamamlandi! Devam etmek icin bir tusa basin...
 pause >nul

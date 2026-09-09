@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, urlunparse, parse_qs, urlencode
 
 import requests
 import urllib3
@@ -169,15 +169,26 @@ class BunkrExtractor(BaseExtractor):
         if not items:
             raise ExtractionError("No downloadable media found on this Bunkr page.")
 
-        folder_name = self._safe_filename(self._title_from_url(url))
-        dest = Path(output_path) / folder_name if len(items) > 1 else Path(output_path)
+        dest = Path(output_path)
         dest.mkdir(parents=True, exist_ok=True)
 
         last_path = ""
         for idx, item in enumerate(items, 1):
             dl_url = item.get("url", "")
+            
+            if item.get("_needs_resolve"):
+                try:
+                    _, sub_items = self._scrape_page(dl_url)
+                    if sub_items and sub_items[0].get("url"):
+                        dl_url = sub_items[0]["url"]
+                        item["filename"] = sub_items[0].get("filename", item.get("filename"))
+                except Exception as exc:
+                    logger.warning("Failed to resolve album item %s: %s", dl_url, exc)
+                    continue
+
             if "/file/" in dl_url or "dl.bunkr" in dl_url:
                 dl_url = self._resolve_dl_page(dl_url, url)
+            
             filename = self._safe_filename(item.get("filename", f"file_{idx}"))
             if not dl_url:
                 continue
@@ -209,6 +220,8 @@ class BunkrExtractor(BaseExtractor):
                 self._download_file(dl_url, file_dest, url, _wrapped_hook)
                 last_path = str(file_dest)
             except Exception as exc:
+                if len(items) == 1:
+                    raise  # Let DownloadManager handle and mark as error
                 logger.error(
                     "Bunkr file %d/%d (%s) failed: %s",
                     idx, len(items), filename, exc,
@@ -277,24 +290,7 @@ class BunkrExtractor(BaseExtractor):
                     "_needs_resolve": True,
                 })
 
-            # Now resolve each media page to get the actual download URL
-            resolved: list[dict[str, Any]] = []
-            for item in items:
-                if item.get("_needs_resolve"):
-                    try:
-                        _, sub_items = self._parse_media_page(item["url"])
-                        if sub_items:
-                            sub_items[0]["thumbnail"] = item.get("thumbnail")
-                            resolved.extend(sub_items)
-                        else:
-                            resolved.append(item)
-                    except Exception as exc:
-                        logger.warning("Failed to resolve %s: %s", item["url"], exc)
-                        resolved.append(item)
-                else:
-                    resolved.append(item)
-
-            res = ("album", resolved)
+            res = ("album", items)
             if hasattr(self, "_scrape_cache"):
                 self._scrape_cache[url] = res
             return res
@@ -326,16 +322,28 @@ class BunkrExtractor(BaseExtractor):
         if not real_fname and soup.title:
             real_fname = soup.title.get_text(strip=True).split(" | ")[0].strip()
 
+        # 0. jsCDN from inline scripts (Highest priority for new Bunkr API)
+        m_cdn = re.search(r'var\s+jsCDN\s*=\s*["\']([^"\']+)["\']', html)
+        if m_cdn:
+            cdn_url = m_cdn.group(1).replace("\\/", "/")
+            cdn_url = self._maybe_sign_url(cdn_url, html, url)
+            fname = real_fname or Path(urlparse(cdn_url).path).name
+            items.append({
+                "url": cdn_url,
+                "filename": fname,
+            })
+
         # 1. <video> <source src="..."> or direct video src
-        for source in soup.select("video source[src], video[src]"):
-            src = source.get("src", "")
-            if src:
-                src = self._maybe_sign_url(src, html, url)
-                fname = real_fname or Path(urlparse(src).path).name
-                items.append({
-                    "url": src,
-                    "filename": fname,
-                })
+        if not items:
+            for source in soup.select("video source[src], video[src]"):
+                src = source.get("src", "")
+                if src:
+                    src = self._maybe_sign_url(src, html, url)
+                    fname = real_fname or Path(urlparse(src).path).name
+                    items.append({
+                        "url": src,
+                        "filename": fname,
+                    })
 
         # 2. Direct download link / button (Prioritized before images!)
         if not items:
@@ -399,7 +407,7 @@ class BunkrExtractor(BaseExtractor):
         return res
 
     def _maybe_sign_url(self, cdn_url: str, page_html: str, page_url: str) -> str:
-        """If the page contains a CDN signing endpoint, POST to it and
+        """If the page contains a CDN signing endpoint, GET the token and
         return the signed URL.  Otherwise return the original URL."""
         if "/file/" in cdn_url or "dl.bunkr" in cdn_url:
             resolved = self._resolve_dl_page(cdn_url, page_url)
@@ -423,29 +431,39 @@ class BunkrExtractor(BaseExtractor):
             return cdn_url
 
         sign_endpoint = sign_match.group(1)
+        origin = f"{urlparse(page_url).scheme}://{urlparse(page_url).hostname}"
+        parsed_path = quote(urlparse(cdn_url).path, safe='')
+        sign_url = f"{sign_endpoint}?path={parsed_path}"
+        headers = {
+            "Referer": origin + "/",
+        }
+        
         try:
-            resp = self._session.post(
-                sign_endpoint,
-                json={"url": cdn_url},
-                headers={
-                    "Content-Type": "application/json",
-                    "Referer": page_url,
-                    "Origin": f"{urlparse(page_url).scheme}://{urlparse(page_url).hostname}",
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            resp = self._session.get(sign_url, headers=headers, timeout=15)
+        except Exception:
+            resp = None
+            
+        if not resp or resp.status_code != 200:
+            try:
+                if getattr(self, "_cffi_session", None) is None:
+                    from curl_cffi.requests import Session as CffiSession
+                    self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
+                resp = self._cffi_session.get(sign_url, headers=headers, timeout=15)
+            except Exception as exc:
+                logger.warning("Failed to sign url (cffi fallback): %s", exc)
+                return cdn_url
 
-            # The response may contain the signed URL or a token to append
-            if "url" in data:
-                return data["url"]
-            if "token" in data:
-                separator = "&" if "?" in cdn_url else "?"
-                return f"{cdn_url}{separator}token={data['token']}"
-
-        except Exception as exc:
-            logger.warning("CDN signing failed for %s: %s", cdn_url, exc)
+        try:
+            if resp and resp.status_code == 200:
+                data = resp.json()
+                if "url" in data:
+                    return data["url"]
+                if "token" in data:
+                    separator = "&" if "?" in cdn_url else "?"
+                    ex_param = f"&ex={data['ex']}" if "ex" in data else ""
+                    return f"{cdn_url}{separator}token={data['token']}{ex_param}"
+        except Exception:
+            pass
 
         return cdn_url
 
@@ -457,35 +475,53 @@ class BunkrExtractor(BaseExtractor):
         file_id = m.group(1)
         origin = f"{urlparse(dl_url).scheme}://{urlparse(dl_url).hostname}"
         api_url = urljoin(origin, "/api/_001_v2")
+        headers = {
+            "Content-Type": "application/json",
+            "Referer": origin + "/",
+        }
+        json_data = {"id": file_id}
+        
         try:
-            resp = self._session.post(
-                api_url,
-                json={"id": file_id},
-                headers={
-                    "Content-Type": "application/json",
-                    "Referer": dl_url,
-                },
-                timeout=15,
-            )
-            if resp.status_code == 200:
+            resp = self._session.post(api_url, json=json_data, headers=headers, timeout=15)
+        except Exception:
+            resp = None
+
+        if not resp or resp.status_code != 200:
+            try:
+                if getattr(self, "_cffi_session", None) is None:
+                    from curl_cffi.requests import Session as CffiSession
+                    self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
+                resp = self._cffi_session.post(api_url, json=json_data, headers=headers, timeout=15)
+            except Exception as exc:
+                logger.warning("Failed to resolve Bunkr dl page (cffi fallback) %s: %s", dl_url, exc)
+                return dl_url
+
+        try:
+            if resp and resp.status_code == 200:
                 meta = resp.json()
                 mediafiles = meta.get("mediafiles", "")
                 path = meta.get("path", "")
                 if mediafiles and path:
                     raw_url = mediafiles + path
                     parsed_path = quote(urlparse(raw_url).path)
-                    sign_resp = self._session.get(
-                        f"https://glb-apisign.cdn.cr/sign?path={parsed_path}",
-                        headers={"Referer": dl_url},
-                        timeout=15,
-                    )
-                    if sign_resp.status_code == 200:
+                    sign_url = f"https://glb-apisign.cdn.cr/sign?path={parsed_path}"
+                    
+                    try:
+                        sign_resp = self._session.get(sign_url, headers={"Referer": origin + "/"}, timeout=15)
+                    except Exception:
+                        sign_resp = None
+                        
+                    if not sign_resp or sign_resp.status_code != 200:
+                        if getattr(self, "_cffi_session", None) is None:
+                            from curl_cffi.requests import Session as CffiSession
+                            self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
+                        sign_resp = self._cffi_session.get(sign_url, headers={"Referer": origin + "/"}, timeout=15)
+                        
+                    if sign_resp and sign_resp.status_code == 200:
                         sdata = sign_resp.json()
                         token = sdata.get("token", "")
                         ex = sdata.get("ex", "")
                         signed = f"{raw_url}?token={token}&ex={ex}"
-                        if meta.get("original"):
-                            signed += f"&n={quote(meta['original'])}"
                         return signed
         except Exception as exc:
             logger.warning("Failed to resolve Bunkr dl page %s: %s", dl_url, exc)
@@ -496,55 +532,89 @@ class BunkrExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     def _fetch_page(self, url: str) -> str:
-        """Fetch a page's HTML, using curl_cffi if Cloudflare blocks us."""
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = self._session.get(url, timeout=12)
+        """Fetch a page's HTML, trying alternative Bunkr domains on connection failures."""
+        parsed = urlparse(url)
+        original_host = parsed.hostname or ""
 
-                # Detect Cloudflare challenge
-                if resp.status_code == 403 or (
-                    resp.status_code == 200
-                    and "cf-browser-verification" in resp.text
-                ):
-                    logger.info("Cloudflare detected on %s – trying curl_cffi.", url)
-                    return self._fetch_with_curl_cffi(url)
+        # Ordered list of fallback domains to try
+        _FALLBACK_DOMAINS = [
+            "bunkr.cr", "bunkr.si", "bunkr.fi", "bunkr.ph",
+            "bunkr.ac", "bunkr.ws", "bunkr.sk", "bunkr.black",
+            "bunkr.red", "bunkr.site",
+        ]
 
-                resp.raise_for_status()
-                return resp.text
+        # Build candidate URLs: original domain first, then alternatives
+        candidates: list[str] = [url]
+        for domain in _FALLBACK_DOMAINS:
+            if domain != original_host:
+                alt = parsed._replace(netloc=domain).geturl()
+                candidates.append(alt)
 
-            except (requests.Timeout, requests.ConnectionError) as exc:
-                logger.info("Connection/Timeout error on %s with requests (%s) – trying curl_cffi immediately.", url, exc)
+        last_exc: Exception = Exception("No candidates tried")
+
+        for candidate_url in candidates:
+            for attempt in range(1, 3):  # 2 attempts per domain
                 try:
-                    return self._fetch_with_curl_cffi(url)
-                except Exception as cffi_exc:
-                    if attempt < _MAX_RETRIES:
-                        wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                        logger.warning("Bunkr curl_cffi fallback also failed on attempt %d/%d (%s) – retrying in %ds.", attempt, _MAX_RETRIES, cffi_exc, wait)
-                        time.sleep(wait)
-                        continue
-                    raise ExtractionError(f"Bunkr page timed out (both requests and curl_cffi failed): {url}") from exc
-            except requests.HTTPError as exc:
-                status = exc.response.status_code if exc.response is not None else 0
-                if status in (403, 429):
-                    logger.info("Bunkr HTTP %d – trying curl_cffi immediately.", status)
-                    try:
-                        return self._fetch_with_curl_cffi(url)
-                    except Exception:
-                        pass
-                if status in (403, 429) and attempt < _MAX_RETRIES:
-                    wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    logger.warning("Bunkr %d on attempt %d/%d – retrying in %ds.", status, attempt, _MAX_RETRIES, wait)
-                    time.sleep(wait)
-                    continue
-                raise ExtractionError(f"Bunkr page fetch failed (HTTP {status}): {url}") from exc
-            except requests.RequestException as exc:
-                if attempt < _MAX_RETRIES:
-                    wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    time.sleep(wait)
-                    continue
-                raise ExtractionError(f"Bunkr network error: {exc}") from exc
+                    resp = self._session.get(candidate_url, timeout=15)
 
-        raise ExtractionError(f"Bunkr page fetch failed after {_MAX_RETRIES} attempts: {url}")
+                    # Detect Cloudflare challenge
+                    if resp.status_code == 403 or (
+                        resp.status_code == 200
+                        and "cf-browser-verification" in resp.text
+                    ):
+                        logger.info("Cloudflare detected on %s – trying curl_cffi.", candidate_url)
+                        return self._fetch_with_curl_cffi(candidate_url)
+
+                    resp.raise_for_status()
+                    return resp.text
+
+                except (requests.Timeout, requests.ConnectionError) as exc:
+                    last_exc = exc
+                    logger.info(
+                        "Connection error on %s (%s) – trying curl_cffi.",
+                        candidate_url, exc,
+                    )
+                    try:
+                        return self._fetch_with_curl_cffi(candidate_url)
+                    except Exception as cffi_exc:
+                        last_exc = cffi_exc
+                        exc_str = str(cffi_exc).lower()
+                        is_reset = any(k in exc_str for k in (
+                            "connection aborted", "bağlantı karşıdan kesildi",
+                            "connection reset", "(35) recv failure",
+                        ))
+                        if is_reset:
+                            logger.warning(
+                                "Domain %s blocked/rate-limited – trying next domain.",
+                                candidate_url,
+                            )
+                            break  # try next domain immediately
+                        if attempt < 2:
+                            time.sleep(2)
+                            continue
+                        break  # try next domain
+
+                except requests.HTTPError as exc:
+                    last_exc = exc
+                    status = exc.response.status_code if exc.response is not None else 0
+                    if status in (403, 429):
+                        logger.info("Bunkr HTTP %d on %s – trying curl_cffi.", status, candidate_url)
+                        try:
+                            return self._fetch_with_curl_cffi(candidate_url)
+                        except Exception:
+                            pass
+                        break  # try next domain
+                    raise ExtractionError(f"Bunkr page fetch failed (HTTP {status}): {candidate_url}") from exc
+
+                except requests.RequestException as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
+                    break
+
+        raise ExtractionError(f"Bunkr page fetch failed on all domains: {last_exc}")
+
 
     def _fetch_with_curl_cffi(self, url: str) -> str:
         """Use curl_cffi to bypass Cloudflare's TLS fingerprinting."""
@@ -558,7 +628,7 @@ class BunkrExtractor(BaseExtractor):
 
         if self._cffi_session is None:
             from curl_cffi.requests import Session as CffiSession
-            self._cffi_session = CffiSession(impersonate="chrome", verify=False)
+            self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
 
         resp = self._cffi_session.get(url, timeout=30, verify=False)
         if resp.status_code != 200:
@@ -574,52 +644,152 @@ class BunkrExtractor(BaseExtractor):
         referer: str,
         progress_hook: Optional[Callable[[dict[str, Any]], None]],
     ) -> None:
-        """Download a single file with exponential back-off."""
+        """Download a single file with exponential back-off.
+
+        Strategy:
+        - Try standard `requests` first: benefits from system-level DPI bypass tools (e.g. ByeDPI).
+        - If 403/429, switch to curl_cffi (Chrome TLS impersonation) as fallback.
+        """
+        # Build download-specific headers that override the session's page-navigation headers.
+        # The session has Sec-Fetch-Site:none / Sec-Fetch-Mode:navigate which are WRONG for
+        ext = Path(urlparse(url).path).suffix.lower()
+        is_video = ext in (".mp4", ".mkv", ".webm")
         headers = {
-            "Referer": referer,
-            "Origin": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}",
+            "Referer": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}/",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Dest": "video" if is_video else "image",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site",
         }
 
         use_cffi = False
+
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 if use_cffi:
                     if self._cffi_session is None:
                         from curl_cffi.requests import Session as CffiSession
                         self._cffi_session = CffiSession(impersonate="chrome", verify=False)
-                    resp = self._cffi_session.get(url, stream=True, timeout=120, headers=headers, verify=False)
+                    
+                    # Re-sign the URL with curl_cffi to match its JA3 fingerprint!
+                    if "token=" in url:
+                        try:
+                            parsed_cdn = urlparse(url)
+                            qs = parse_qs(parsed_cdn.query)
+                            if "token" in qs:
+                                path_encoded = quote(parsed_cdn.path, safe='')
+                                r_sign = self._cffi_session.get(
+                                    f"https://glb-apisign.cdn.cr/sign?path={path_encoded}",
+                                    headers={"Referer": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}/"},
+                                    timeout=15
+                                )
+                                if r_sign.status_code == 200:
+                                    new_sign_data = r_sign.json()
+                                    qs["token"] = [new_sign_data["token"]]
+                                    qs["ex"] = [str(new_sign_data["ex"])]
+                                    qs.pop("n", None)
+                                    new_query = urlencode(qs, doseq=True)
+                                    url = urlunparse(parsed_cdn._replace(query=new_query))
+                        except Exception as sign_e:
+                            logger.warning("Failed to re-sign with curl_cffi: %s", sign_e)
+
+                    # For curl_cffi: pass only non-None headers
+                    cffi_headers = {k: v for k, v in headers.items() if v is not None}
+                    resp = self._cffi_session.get(
+                        url, stream=True, timeout=120, headers=cffi_headers, verify=False,
+                    )
                 else:
                     resp = self._session.get(url, stream=True, timeout=120, headers=headers)
 
                 if resp.status_code in (403, 429):
+                    # Bunkr's CDN returns a JSON {"error":"forbidden"} if the file is deleted or path is invalid.
+                    # Cloudflare bot protection returns HTML. So if it's JSON, don't retry!
+                    content_type = resp.headers.get("Content-Type", "").lower()
+                    
+                    is_json_error = "application/json" in content_type
+                    if not is_json_error:
+                        try:
+                            # Peek the first bytes to see if it's a JSON string
+                            peek = next(resp.iter_content(chunk_size=128), b"").decode("utf-8", "ignore").strip()
+                            if peek.startswith("{") and "forbidden" in peek.lower():
+                                is_json_error = True
+                        except Exception:
+                            pass
+
+                    if is_json_error:
+                        logger.warning("Bunkr file is deleted or forbidden by server (JSON response). Skipping.")
+                        raise Exception("Bunkr sunucusunda bu dosya bulunamadı veya silinmiş (403 Forbidden).")
+
                     if not use_cffi:
+                        logger.info(
+                            "Bunkr CDN returned %d with requests – switching to curl_cffi (attempt %d/%d).",
+                            resp.status_code, attempt, _MAX_RETRIES,
+                        )
                         use_cffi = True
                         continue
                     wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
-                    logger.warning("Bunkr download %d (attempt %d/%d) – retrying in %ds.", resp.status_code, attempt, _MAX_RETRIES, wait)
+                    logger.warning(
+                        "Bunkr download %d (attempt %d/%d) – retrying in %ds.",
+                        resp.status_code, attempt, _MAX_RETRIES, wait,
+                    )
                     time.sleep(wait)
                     continue
 
-                if resp.status_code != 200 and resp.status_code != 206:
+                if resp.status_code not in (200, 206):
                     resp.raise_for_status()
 
-                resp.close()
-                from src.extractors.fast_downloader import download_file_fast
-                download_file_fast(
-                    url=url,
-                    target_path=dest,
-                    headers=headers,
-                    progress_hook=progress_hook,
-                    display_name=str(dest.name),
-                    num_workers=16,
-                )
+                # Stream to disk
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = dest.with_suffix(dest.suffix + ".downloading")
+                total_size = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_hook:
+                            progress_hook({
+                                "status": "downloading",
+                                "filename": str(dest),
+                                "downloaded_bytes": downloaded,
+                                "total_bytes": total_size,
+                            })
+
+                tmp_path.replace(dest)
+                if progress_hook:
+                    progress_hook({"status": "finished", "filename": str(dest)})
                 return  # success
 
-            except (requests.RequestException, IOError, Exception) as exc:
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                
+                # If we explicitly raised the forbidden error, abort immediately without retries
+                if "403 forbidden" in exc_str and "silinmiş" in exc_str:
+                    raise
+                    
+                is_reset = any(k in exc_str for k in (
+                    "connection aborted", "bağlantı karşıdan kesildi",
+                    "connection reset", "(35) recv failure",
+                ))
+                if is_reset and use_cffi:
+                    # curl_cffi itself is blocked – likely conflicts with system DPI bypass tool
+                    logger.warning(
+                        "curl_cffi connection reset (possible ByeDPI conflict) on attempt %d/%d – switching back to requests.",
+                        attempt, _MAX_RETRIES,
+                    )
+                    use_cffi = False
+                    time.sleep(2)
+                    continue
+
                 if not use_cffi:
                     logger.info("Switching to curl_cffi for download due to: %s", exc)
                     use_cffi = True
                     continue
+
                 if attempt == _MAX_RETRIES:
                     raise ExtractionError(f"Bunkr download failed after {_MAX_RETRIES} attempts: {exc}") from exc
                 wait = _RETRY_BACKOFF * (2 ** (attempt - 1))

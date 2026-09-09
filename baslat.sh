@@ -81,8 +81,26 @@ fi
 echo "[INFO] Uygulama çalıştırılıyor (python3 src/main.py)..."
 echo ""
 
+# Qt WebEngine / glibc yığın çakışması düzeltmesi
+export MALLOC_CHECK_=0
+export PYTHONMALLOC=malloc
+
 python3 src/main.py
 EXIT_CODE=$?
+
+# Exit code 139 = Segmentation Fault
+# Exit code 134 = SIGABRT (corrupted double-linked list / free(): invalid pointer)
+# Qt WebEngine, Fedora/Linux'ta venv ilk kurulumundan sonra GPU shader önbelleğini
+# hazırlarken ilk çalıştırmada çöküyor. İkinci çalıştırma her zaman düzgün açılır.
+if [ $EXIT_CODE -eq 139 ] || [ $EXIT_CODE -eq 134 ]; then
+    echo ""
+    echo "[UYARI] Qt WebEngine GPU önbelleği hazırlanıyor, otomatik yeniden başlatılıyor..."
+    echo ""
+    sleep 1
+    python3 src/main.py
+    EXIT_CODE=$?
+fi
+
 
 echo ""
 if [ $EXIT_CODE -ne 0 ]; then

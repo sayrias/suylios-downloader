@@ -1078,6 +1078,50 @@ body::before {
   background: rgba(255, 255, 255, 0.015);
 }
 
+.setting-sub-item {
+  padding: 10px 20px 10px 44px;
+  background: linear-gradient(90deg, rgba(108, 99, 255, 0.07) 0%, rgba(108, 99, 255, 0.02) 100%);
+  border-left: 3px solid rgba(108, 99, 255, 0.55) !important;
+  border-bottom: 1px solid rgba(108, 99, 255, 0.12) !important;
+  margin: 0;
+  position: relative;
+  animation: subItemFadeIn 0.2s ease;
+}
+
+@keyframes subItemFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.setting-sub-item::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-left: 2px solid rgba(108, 99, 255, 0.5);
+  border-bottom: 2px solid rgba(108, 99, 255, 0.5);
+  border-radius: 0 0 0 4px;
+}
+
+.setting-sub-item:hover {
+  background: linear-gradient(90deg, rgba(108, 99, 255, 0.13) 0%, rgba(108, 99, 255, 0.04) 100%);
+}
+
+.setting-sub-item .setting-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgba(200, 195, 255, 0.95);
+}
+
+.setting-sub-item .setting-desc {
+  font-size: 0.775rem;
+  opacity: 0.65;
+  margin-top: 1px;
+}
+
 .setting-info {
   flex: 1;
   min-width: 0;

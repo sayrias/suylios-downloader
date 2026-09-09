@@ -308,6 +308,12 @@ class YtdlpExtractor(BaseExtractor):
                     "player_skip": ["webpage", "configs"],
                 }
             }
+        if "bunkr" in check_url or "cyberdrop" in check_url:
+            try:
+                from yt_dlp.networking.impersonate import ImpersonateTarget
+                opts["impersonate"] = ImpersonateTarget(client="chrome")
+            except Exception:
+                pass
         if "list=rd" in check_url or "start_radio=" in check_url or "list=ul" in check_url or "list=ll" in check_url:
             opts["playlistend"] = 50
         if "reddit" in check_url or "redd.it" in check_url:

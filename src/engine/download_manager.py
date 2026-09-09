@@ -582,7 +582,7 @@ class DownloadManager:
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
-                    if "gofile.io" not in task.url.lower():
+                    if "gofile.io" not in task.url.lower() and "bunkr." not in task.url.lower():
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
@@ -904,7 +904,7 @@ class DownloadManager:
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
-                    if "gofile.io" not in task.url.lower():
+                    if "gofile.io" not in task.url.lower() and "bunkr." not in task.url.lower():
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)

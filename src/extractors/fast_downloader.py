@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Callable
 try:
     from curl_cffi import requests
+    HAS_CFFI = True
 except ImportError:
     import requests
+    HAS_CFFI = False
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger("suylios.fast_downloader")
@@ -43,9 +45,13 @@ def download_file_fast(
     # 1. Probe file size and Range support
     total_size = 0
     accept_ranges = False
+    req_kwargs = {"timeout": 12, "verify": False}
+    if HAS_CFFI:
+        req_kwargs["impersonate"] = "chrome"
+
     try:
         r = requests.head(
-            url, headers=req_headers, timeout=12, allow_redirects=True, verify=False
+            url, headers=req_headers, allow_redirects=True, **req_kwargs
         )
         if r.status_code in (200, 206):
             total_size = int(r.headers.get("Content-Length", 0))
@@ -62,9 +68,8 @@ def download_file_fast(
             r_test = requests.get(
                 url,
                 headers={**req_headers, "Range": "bytes=0-1023"},
-                timeout=12,
                 stream=True,
-                verify=False,
+                **req_kwargs
             )
             if r_test.status_code == 206:
                 accept_ranges = True
@@ -146,13 +151,17 @@ def download_file_fast(
                 return
             part_path = part_files[part_id]
             h = {**req_headers, "Range": f"bytes={range_start}-{range_end}"}
+            worker_kwargs = {"timeout": 20, "verify": False}
+            if HAS_CFFI:
+                worker_kwargs["impersonate"] = "chrome"
+
             for attempt in range(5):
                 if cancel_event and cancel_event.is_set():
                     return
                 try:
                     # Open part file ONCE for writing per worker - ZERO disk contention
                     resp = requests.get(
-                        url, headers=h, timeout=20, stream=True, verify=False
+                        url, headers=h, stream=True, **worker_kwargs
                     )
                     try:
                         if resp.status_code in (200, 206):
@@ -203,8 +212,12 @@ def download_file_fast(
             display_name or target_path.name,
         )
         tmp_path = target_path.with_suffix(target_path.suffix + ".downloading")
+        single_kwargs = {"timeout": 25, "verify": False}
+        if HAS_CFFI:
+            single_kwargs["impersonate"] = "chrome"
+
         resp = requests.get(
-            url, headers=req_headers, timeout=25, stream=True, verify=False
+            url, headers=req_headers, stream=True, **single_kwargs
         )
         try:
             resp.raise_for_status()

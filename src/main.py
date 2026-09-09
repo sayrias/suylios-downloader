@@ -174,7 +174,7 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
 
@@ -735,9 +735,41 @@ class Bridge:
             self._window.minimize()
 
     def _get_work_area(self) -> tuple[int, int, int, int]:
-        """Get monitor working area excluding Windows taskbar."""
+        """Get monitor working area excluding taskbar."""
         if sys.platform != "win32":
-            return 0, 0, 1920, 1040
+            # Linux: Qt ekranından gerçek çözünürlüğü al
+            try:
+                from PyQt5.QtWidgets import QApplication  # type: ignore
+                app = QApplication.instance()
+                if app:
+                    screen = app.primaryScreen()
+                    if screen:
+                        geom = screen.availableGeometry()
+                        return geom.x(), geom.y(), geom.width(), geom.height()
+            except Exception:
+                pass
+            try:
+                from PyQt6.QtWidgets import QApplication  # type: ignore
+                app = QApplication.instance()
+                if app:
+                    screen = app.primaryScreen()
+                    if screen:
+                        geom = screen.availableGeometry()
+                        return geom.x(), geom.y(), geom.width(), geom.height()
+            except Exception:
+                pass
+            # xrandr fallback
+            try:
+                import subprocess, re
+                out = subprocess.check_output(["xrandr", "--current"], timeout=2).decode()
+                for line in out.splitlines():
+                    if " connected" in line:
+                        m = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
+                        if m:
+                            return int(m.group(3)), int(m.group(4)), int(m.group(1)), int(m.group(2))
+            except Exception:
+                pass
+            return 0, 0, 1920, 1080
         try:
             import ctypes
             user32 = ctypes.windll.user32  # type: ignore
@@ -1597,9 +1629,14 @@ def main() -> None:
                 window.show()
             else:
                 x, y, work_w, work_h = bridge._get_work_area()
-                win_w, win_h = 1200, 800
+                win_w = min(1200, work_w)
+                win_h = min(800, work_h)
                 cx = x + max(0, (work_w - win_w) // 2)
                 cy = y + max(0, (work_h - win_h) // 2)
+                try:
+                    window.resize(win_w, win_h)
+                except Exception:
+                    pass
                 window.move(cx, cy)
                 window.show()
         except Exception as exc:

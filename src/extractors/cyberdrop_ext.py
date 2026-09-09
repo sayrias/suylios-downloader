@@ -118,6 +118,7 @@ class CyberdropDLExtractor(BaseExtractor):
         os.makedirs(cdl_appdata, exist_ok=True)
 
         cdl_bin = self._get_cdl_bin()
+        cancel_event = kwargs.get("cancel_event")
         base_flags = [
             "--download",
             "--no-ui",
@@ -168,7 +169,7 @@ class CyberdropDLExtractor(BaseExtractor):
             scrape_failures = 0
             try:
                 while True:
-                    if cancel_event.is_set():
+                    if cancel_event and cancel_event.is_set():
                         try:
                             process.terminate()
                         except Exception:
@@ -190,7 +191,7 @@ class CyberdropDLExtractor(BaseExtractor):
                                 }
                             )
 
-                if cancel_event.is_set():
+                if cancel_event and cancel_event.is_set():
                     raise ExtractionCancelled("cyberdrop-dl download was cancelled")
 
                 ret = process.poll()

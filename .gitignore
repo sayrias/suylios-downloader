@@ -37,3 +37,8 @@ bin/ffprobe.exe
 config.json
 history.json
 scratch/
+cookies.txt
+
+# ── Node.js ──
+node_modules/
+package-lock.json
