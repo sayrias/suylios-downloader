@@ -459,7 +459,20 @@ def build_portable():
     print("\n" + "="*60)
     print("  1. Taşınabilir ZIP Paketi (Suylios-Portable.zip)")
     print("="*60)
-    build_out = build_onedir()
+    # Önce onedir önbelleği dene; yoksa mevcut onefile binary'den portable yap
+    onefile_binary = DIST_DIR / ("Suylios.exe" if IS_WINDOWS else "Suylios")
+    use_onefile_mode = False
+
+    build_out = BUILD_DIR / "SuyliosDownloader"
+    exe_name = "SuyliosDownloader.exe" if IS_WINDOWS else "SuyliosDownloader"
+    if build_out.exists() and (build_out / exe_name).exists():
+        print("[*] Onedir önbelleği bulundu, portable için kullanılıyor.")
+    elif onefile_binary.exists():
+        print("[*] Onedir yok ama onefile binary mevcut — onefile'dan portable ZIP oluşturuluyor.")
+        use_onefile_mode = True
+    else:
+        print("[*] Onedir derleniyor (portable için)...")
+        build_out = build_onedir()
 
     portable_dir = DIST_DIR / "Suylios-Portable"
     if portable_dir.exists():
@@ -467,25 +480,30 @@ def build_portable():
     portable_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        for item in build_out.iterdir():
-            dst = portable_dir / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dst)
-
-        # Kopyalanan _internal içinden de Qt temizliği yap
-        _strip_internal(portable_dir)
-
-        # Yürütülebilir adını düzenle
-        exe_src = "SuyliosDownloader.exe" if IS_WINDOWS else "SuyliosDownloader"
-        exe_dst = "suylios.exe" if IS_WINDOWS else "suylios"
-        old = portable_dir / exe_src
-        new = portable_dir / exe_dst
-        if old.exists() and not new.exists():
-            os.rename(old, new)
+        if use_onefile_mode:
+            # Onefile binary'yi doğrudan portable klasörüne koy
+            exe_dst = "suylios.exe" if IS_WINDOWS else "suylios"
+            shutil.copy2(onefile_binary, portable_dir / exe_dst)
             if not IS_WINDOWS:
-                new.chmod(0o755)
+                (portable_dir / exe_dst).chmod(0o755)
+        else:
+            for item in build_out.iterdir():
+                dst = portable_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dst)
+
+            # Kopyalanan _internal içinden de Qt temizliği yap
+            _strip_internal(portable_dir)
+
+            # Yürütülebilir adını düzenle
+            old = portable_dir / exe_name
+            new = portable_dir / ("suylios.exe" if IS_WINDOWS else "suylios")
+            if old.exists() and not new.exists():
+                os.rename(old, new)
+                if not IS_WINDOWS:
+                    new.chmod(0o755)
 
         # Dizin yapısı
         (portable_dir / "Downloads").mkdir(exist_ok=True)
@@ -707,8 +725,8 @@ def build_onefile():
     print("="*60)
 
     workpath = BUILD_DIR / "temp_onefile"
-    # İsim: Windows'ta Suylios-Windows.exe, Linux'ta Suylios-Linux
-    out_name = "Suylios-Windows" if IS_WINDOWS else "Suylios-Linux"
+    # Linux'ta: Suylios  |  Windows'ta: Suylios.exe
+    out_name = "Suylios"
     ok = _build_pyinstaller(out_name, onefile=True, workpath=workpath)
     if ok:
         out_ext = ".exe" if IS_WINDOWS else ""
