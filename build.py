@@ -33,6 +33,46 @@ IS_WINDOWS = os.name == "nt"
 IS_LINUX   = sys.platform.startswith("linux")
 
 # ──────────────────────────────────────────────
+#  Build Log (konsol + dosya aynı anda)
+# ──────────────────────────────────────────────
+import datetime
+
+class _TeeStream:
+    """stdout/stderr'i hem konsola hem log dosyasına yazar."""
+    def __init__(self, real_stream, log_file):
+        self._real = real_stream
+        self._log  = log_file
+    def write(self, text):
+        self._real.write(text)
+        try:
+            self._log.write(text)
+            self._log.flush()
+        except Exception:
+            pass
+    def flush(self):
+        self._real.flush()
+    def fileno(self):
+        return self._real.fileno()
+
+def _setup_log() -> Path:
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
+    log_path = log_dir / f"build-{cmd}-{ts}.log"
+    try:
+        lf = open(log_path, "w", encoding="utf-8", errors="replace")
+        sys.stdout = _TeeStream(sys.__stdout__, lf)
+        sys.stderr = _TeeStream(sys.__stderr__, lf)
+        print(f"[LOG] Build logu: {log_path}")
+    except Exception:
+        pass
+    return log_path
+
+_LOG_PATH = _setup_log()
+
+
+# ──────────────────────────────────────────────
 #  Uygulama meta
 # ──────────────────────────────────────────────
 def _get_app_version() -> str:

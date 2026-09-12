@@ -269,56 +269,57 @@ show_menu() {
             show_menu
             ;;
         5)
+            LOG_FILE="$SCRIPT_DIR/logs/build-$(date +%Y%m%d-%H%M%S).log"
+            mkdir -p "$SCRIPT_DIR/logs"
             echo "[INFO] Tüm paketler sırayla derleniyor..."
+            echo "[INFO] Build logu: $LOG_FILE"
             echo ""
 
-            # 1) Linux portable + .run
-            echo "─── [1/4] Linux Portable + .run ───"
-            $PY_CMD build.py portable
-            make_linux_run
+            # 1) Linux binary (önce bu; portable için gerekli)
+            echo "─── [1/4] Linux Tek Dosya Binary ───" | tee -a "$LOG_FILE"
+            $PY_CMD build.py onefile 2>&1 | tee -a "$LOG_FILE"
 
-            # 2) Linux binary
-            echo ""
-            echo "─── [2/4] Linux Tek Dosya Binary ───"
-            $PY_CMD build.py onefile
+            # 2) Linux Portable ZIP + .run (dist/Suylios mevcut olduğundan fallback çalışır)
+            echo "" | tee -a "$LOG_FILE"
+            echo "─── [2/4] Linux Portable + .run ───" | tee -a "$LOG_FILE"
+            $PY_CMD build.py portable 2>&1 | tee -a "$LOG_FILE"
+            make_linux_run 2>&1 | tee -a "$LOG_FILE"
 
             # 3) Windows EXE (varsa)
-            echo ""
-            echo "─── [3/4] Windows EXE ───"
+            echo "" | tee -a "$LOG_FILE"
+            echo "─── [3/4] Windows EXE ───" | tee -a "$LOG_FILE"
             if [ "$HOST_OS" = "Windows" ]; then
-                # Windows native'de zaten onefile çalışır, EXE mevcut
-                echo "[INFO] Windows native: EXE [2/4] adımında üretildi."
+                echo "[INFO] Windows native: EXE zaten mevcut." | tee -a "$LOG_FILE"
             elif has_wine; then
                 WIN_PY=$(find_wine_python)
                 if [ -n "$WIN_PY" ]; then
-                    build_windows_wine_onefile
+                    build_windows_wine_onefile 2>&1 | tee -a "$LOG_FILE"
                 else
-                    echo "[UYARI] Windows EXE atlandı: Wine Python yok."
+                    echo "[UYARI] Windows EXE atlandı: Wine Python yok." | tee -a "$LOG_FILE"
                 fi
             else
-                echo "[UYARI] Windows EXE atlandı: Wine yok."
+                echo "[UYARI] Windows EXE atlandı: Wine yok." | tee -a "$LOG_FILE"
             fi
 
             # 4) Windows Setup (varsa)
-            echo ""
-            echo "─── [4/4] Windows Setup.exe ───"
+            echo "" | tee -a "$LOG_FILE"
+            echo "─── [4/4] Windows Setup.exe ───" | tee -a "$LOG_FILE"
             INNO=$(find_inno)
             if [ -n "$INNO" ]; then
-                $PY_CMD build.py setup
+                $PY_CMD build.py setup 2>&1 | tee -a "$LOG_FILE"
             else
-                echo "[UYARI] Setup.exe atlandı: Inno Setup yok."
-                if ! has_wine; then
-                    echo "        (Wine: yok, Inno Setup: yok)"
-                fi
+                echo "[UYARI] Setup.exe atlandı: Inno Setup yok." | tee -a "$LOG_FILE"
             fi
 
+            echo "" | tee -a "$LOG_FILE"
+            echo "==========================================" | tee -a "$LOG_FILE"
+            echo "[TAMAM] Tüm derleme işlemleri tamamlandı." | tee -a "$LOG_FILE"
+            echo "" | tee -a "$LOG_FILE"
+            echo "dist/ klasöründeki çıktılar:" | tee -a "$LOG_FILE"
+            ls -lh dist/ 2>/dev/null | awk 'NR>1 {printf "  %-40s %s\n", $NF, $5}' | tee -a "$LOG_FILE"
+            echo "==========================================" | tee -a "$LOG_FILE"
             echo ""
-            echo "=========================================="
-            echo "[TAMAM] Tüm derleme işlemleri tamamlandı."
-            echo ""
-            echo "dist/ klasöründeki çıktılar:"
-            ls -lh dist/ 2>/dev/null | awk 'NR>1 {printf "  %-40s %s\n", $NF, $5}'
-            echo "=========================================="
+            echo "[LOG] Tam build logu: $LOG_FILE"
             read -p "Devam etmek için Enter'a basın..."
             show_menu
             ;;
