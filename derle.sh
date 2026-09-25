@@ -62,11 +62,47 @@ has_nsis() { command -v makensis &>/dev/null; }
 
 install_inno_wine() {
     echo "[INFO] Inno Setup Wine'a kuruluyor..."
-    local INNO_URL="https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
-    local INNO_TMP="/tmp/innosetup.exe"
-    curl -L --progress-bar "$INNO_URL" -o "$INNO_TMP" 2>/dev/null
+    local INNO_TMP="/tmp/innosetup-$(date +%s).exe"
+
+    # Birden fazla mirror dene
+    local URLS=(
+        "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
+        "https://github.com/jrsoftware/issrc/releases/download/is-6_3_3/innosetup-6.3.3.exe"
+        "https://jrsoftware.org/download.php/is.exe"
+    )
+
+    local downloaded=0
+    for url in "${URLS[@]}"; do
+        echo "[INFO] Deneniyor: $url"
+        curl -L -A "Mozilla/5.0" --max-time 60 -o "$INNO_TMP" "$url" 2>/dev/null
+        # PE/EXE mi kontrol et (magic bytes: MZ)
+        if [ -f "$INNO_TMP" ] && [ "$(head -c 2 "$INNO_TMP" | xxd -p 2>/dev/null)" = "4d5a" ]; then
+            echo "[INFO] İndirme başarılı: $(du -sh "$INNO_TMP" | cut -f1)"
+            downloaded=1
+            break
+        else
+            echo "[UYARI] Geçersiz dosya, sonraki mirror deneniyor..."
+            rm -f "$INNO_TMP"
+        fi
+    done
+
+    if [ "$downloaded" -eq 0 ]; then
+        echo "[HATA] Inno Setup indirilemedi. Manuel kurulum:"
+        echo "   1. https://jrsoftware.org/isdl.php adresinden indir"
+        echo "   2. wine innosetup-6.x.x.exe /VERYSILENT"
+        return 1
+    fi
+
+    echo "[INFO] Wine ile sessiz kurulum yapılıyor..."
     wine "$INNO_TMP" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART 2>/dev/null
+    local exit_code=$?
     rm -f "$INNO_TMP"
+
+    if [ $exit_code -eq 0 ] || find_inno | grep -q wine; then
+        echo "[OK] Inno Setup kuruldu."
+    else
+        echo "[UYARI] Kurulum çıkış kodu: $exit_code (yine de devam ediliyor)"
+    fi
     find_inno
 }
 
@@ -101,41 +137,8 @@ setup_wine_windows() {
     return 0
 }
 
-# ── Linux .run paketi ─────────────────────────────────────
-make_linux_run() {
-    PORTABLE_ZIP=$(ls dist/Suylios-Portable*.zip 2>/dev/null | head -1)
-    if [ -z "$PORTABLE_ZIP" ]; then
-        echo "[UYARI] Linux .run atlandı: önce Portable ZIP gerekli."
-        return
-    fi
-
-    RUN_OUT="${PORTABLE_ZIP%.zip}.run"
-    TMP_DIR=$(mktemp -d)
-    TMP_PAYLOAD="$TMP_DIR/payload.tar.gz"
-    TMP_HEADER="$TMP_DIR/header.sh"
-
-    cd dist
-    unzip -q "$(basename "$PORTABLE_ZIP")" -d "$TMP_DIR/content" 2>/dev/null
-    tar czf "$TMP_PAYLOAD" -C "$TMP_DIR/content" .
-    cd "$SCRIPT_DIR"
-
-    cat > "$TMP_HEADER" << 'RUNEOF'
-#!/usr/bin/env bash
-TMPDIR=$(mktemp -d)
-SELF=$(readlink -f "$0")
-SKIP=$(awk '/^__PAYLOAD__$/{print NR+1; exit}' "$SELF")
-tail -n +"$SKIP" "$SELF" | tar -xz -C "$TMPDIR"
-cd "$TMPDIR" && bash baslat.sh
-rm -rf "$TMPDIR"
-exit 0
-__PAYLOAD__
-RUNEOF
-
-    cat "$TMP_HEADER" "$TMP_PAYLOAD" > "dist/$(basename "$RUN_OUT")"
-    chmod +x "dist/$(basename "$RUN_OUT")"
-    rm -rf "$TMP_DIR"
-    echo "[OK] Linux .run: dist/$(basename "$RUN_OUT")"
-}
+# .run paketi kaldırıldı - gerek yok
+make_linux_run() { :; }
 
 # ── Wine ile Windows EXE (tek dosya) ──────────────────────
 build_windows_wine_onefile() {
@@ -151,37 +154,60 @@ build_windows_wine_onefile() {
     WINE_ICON="Z:$(echo "$SCRIPT_DIR/src/ui/icon.ico" | sed 's|/|\\\\|g')"
 
     # Wine Python'da gerekli paketleri kur (henüz kurulmadıysa)
-    wine "$WIN_PY" -m pip show pyinstaller &>/dev/null || \
-        wine "$WIN_PY" -m pip install --quiet pyinstaller pywebview yt-dlp gallery-dl requests aiohttp cyberdrop-dl 2>/dev/null
+    echo "[INFO] Wine Python bağımlılıkları kontrol ediliyor..."
+    wine "$WIN_PY" -m pip install --quiet --upgrade \
+        pyinstaller pywebview yt-dlp gallery-dl requests \
+        aiohttp aiofiles cyberdrop-dl pystray pillow \
+        lxml beautifulsoup4 mutagen async-mega-py pycryptodome 2>/dev/null
+    echo "[INFO] Wine pip kurulumu tamamlandı."
 
     mkdir -p "$SCRIPT_DIR/dist" "$SCRIPT_DIR/build/temp_wine_onefile" "$SCRIPT_DIR/build"
+
+    WINE_SITES_JSON="Z:$(echo "$SCRIPT_DIR/SUPPORTED_SITES.json" | sed 's|/|\\\\|g')"
 
     wine "$WIN_PY" -m PyInstaller \
         --noconfirm --onefile --windowed \
         --name "Suylios" \
         --icon "$WINE_ICON" \
         --add-data "${WINE_SRC_UI};ui" \
-        --collect-all gallery_dl \
-        --collect-all yt_dlp \
+        --add-data "${WINE_SITES_JSON};." \
+        --collect-submodules gallery_dl \
+        --collect-data gallery_dl \
+        --collect-submodules yt_dlp \
+        --collect-data yt_dlp \
+        --collect-submodules cyberdrop_dl \
+        --collect-data cyberdrop_dl \
         --collect-all webview \
         --collect-all pythonnet \
+        --collect-all curl_cffi \
         --hidden-import clr \
         --hidden-import webview.platforms.winforms \
         --hidden-import webview.platforms.edgechromium \
+        --hidden-import aiohttp \
+        --hidden-import aiofiles \
+        --hidden-import pystray \
+        --hidden-import PIL \
+        --hidden-import mutagen \
         --exclude-module unittest \
         --exclude-module test \
         --exclude-module scipy \
         --exclude-module numpy \
         --exclude-module pandas \
         --exclude-module tkinter \
+        --exclude-module PyQt6.QtWebEngineWidgets \
+        --exclude-module PyQt6.QtWebEngineCore \
+        --collect-submodules mega \
+        --collect-all Crypto \
         --distpath "$WINE_DIST" \
         --workpath "$WINE_WORK" \
         --specpath "$WINE_SPEC" \
         "$WINE_MAIN" 2>&1 | grep -v "^0.*fixme:" | grep -v "^0.*warn:"
-    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+
+    # Wine exit code (PIPESTATUS[0]) is unreliable – check the actual EXE
+    if [ -f "$SCRIPT_DIR/dist/Suylios.exe" ]; then
         echo "[OK] Windows EXE: dist/Suylios.exe ($(du -sh "$SCRIPT_DIR/dist/Suylios.exe" 2>/dev/null | cut -f1))"
     else
-        echo "[HATA] Wine derleme başarısız."
+        echo "[HATA] Wine derleme başarısız – dist/Suylios.exe bulunamadı."
     fi
 }
 
@@ -204,11 +230,11 @@ show_menu() {
     echo ""
     echo "========================================================="
     echo ""
-    echo "   1 - Linux Paketi  → Portable ZIP + .run"
-    echo "   2 - Linux Binary  → Tek Dosya Çalıştırılabilir"
-    echo "   3 - Windows EXE   → Wine ile .exe (onefile)"
-    echo "   4 - Windows Setup → Wine + Inno Setup installer"
-    echo "   5 - Hepsini Derle → 1+2+3+4 sırayla"
+    echo "   1 - Linux Portable  → Suylios-Portable.zip"
+    echo "   2 - Linux Binary    → Suylios-Linux (tek dosya)"
+    echo "   3 - Windows EXE     → Wine ile Suylios.exe"
+    echo "   4 - Windows Setup   → Wine + Inno Setup installer"
+    echo "   5 - Hepsini Derle   → 1+2+3+4 sırayla"
     echo "   0 - Çıkış"
     echo ""
     echo "========================================================="
@@ -217,9 +243,8 @@ show_menu() {
 
     case "$secim" in
         1)
-            echo "[INFO] Linux Portable paketi derleniyor..."
+            echo "[INFO] Linux Portable ZIP derleniyor..."
             $PY_CMD build.py portable
-            make_linux_run
             read -p "Tamamlandı! Enter'a basın..."
             show_menu
             ;;
@@ -248,21 +273,17 @@ show_menu() {
                 setup_wine_windows || { read -p "Enter'a basın..."; show_menu; return; }
                 INNO=$(find_inno)
                 if [ -z "$INNO" ]; then
-                    echo "[UYARI] Inno Setup bulunamadı."
-                    echo ""
-                    echo "   Otomatik kurulsun mu? (Wine'a Inno Setup indirilir ~5MB)"
-                    read -p "   Evet için [e], hayır için [h]: " inno_choice
-                    if [ "$inno_choice" = "e" ] || [ "$inno_choice" = "E" ]; then
-                        install_inno_wine
-                        INNO=$(find_inno)
-                    fi
+                    echo "[INFO] Inno Setup bulunamadı, otomatik kuruluyor..."
+                    install_inno_wine
+                    INNO=$(find_inno)
                 fi
                 if [ -n "$INNO" ]; then
                     # Önce Windows EXE derle (wine), sonra Inno ile paketle
                     build_windows_wine_onefile
                     $PY_CMD build.py setup
                 else
-                    echo "[UYARI] Setup.exe atlandı. Inno Setup kurulmadı."
+                    echo "[HATA] Setup.exe üretilemedi: Inno Setup kurulamadı."
+                    echo "  Manuel kurulum için: https://jrsoftware.org/isdl.php"
                 fi
             fi
             read -p "Tamamlandı! Enter'a basın..."
@@ -279,11 +300,10 @@ show_menu() {
             echo "─── [1/4] Linux Tek Dosya Binary ───" | tee -a "$LOG_FILE"
             $PY_CMD build.py onefile 2>&1 | tee -a "$LOG_FILE"
 
-            # 2) Linux Portable ZIP + .run (dist/Suylios mevcut olduğundan fallback çalışır)
+            # 2) Linux Portable ZIP
             echo "" | tee -a "$LOG_FILE"
-            echo "─── [2/4] Linux Portable + .run ───" | tee -a "$LOG_FILE"
+            echo "─── [2/4] Linux Portable ZIP ───" | tee -a "$LOG_FILE"
             $PY_CMD build.py portable 2>&1 | tee -a "$LOG_FILE"
-            make_linux_run 2>&1 | tee -a "$LOG_FILE"
 
             # 3) Windows EXE (varsa)
             echo "" | tee -a "$LOG_FILE"
@@ -305,10 +325,16 @@ show_menu() {
             echo "" | tee -a "$LOG_FILE"
             echo "─── [4/4] Windows Setup.exe ───" | tee -a "$LOG_FILE"
             INNO=$(find_inno)
+            if [ -z "$INNO" ] && has_wine; then
+                echo "[INFO] Inno Setup yok, otomatik kuruluyor..." | tee -a "$LOG_FILE"
+                install_inno_wine 2>&1 | tee -a "$LOG_FILE"
+                INNO=$(find_inno)
+            fi
             if [ -n "$INNO" ]; then
                 $PY_CMD build.py setup 2>&1 | tee -a "$LOG_FILE"
             else
-                echo "[UYARI] Setup.exe atlandı: Inno Setup yok." | tee -a "$LOG_FILE"
+                echo "[UYARI] Setup.exe atlandı: Inno Setup kurulamadı." | tee -a "$LOG_FILE"
+                echo "  İndir: https://jrsoftware.org/isdl.php → wine innosetup-6.x.exe /VERYSILENT" | tee -a "$LOG_FILE"
             fi
 
             echo "" | tee -a "$LOG_FILE"

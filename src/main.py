@@ -21,6 +21,31 @@ import multiprocessing
 multiprocessing.freeze_support()
 
 # ---------------------------------------------------------------------------
+# Linux: Display / GUI backend ortamı — GUI importlarından ÖNCE ayarlanmalı
+# ---------------------------------------------------------------------------
+if sys.platform.startswith("linux"):
+    # Wayland oturumunda GTK hata 71 (EPROTO) verebilir.
+    # GDK_BACKEND=x11 → GTK'yı X11/XWayland'a zorla (Wayland uyumlu).
+    if "GDK_BACKEND" not in os.environ:
+        os.environ["GDK_BACKEND"] = "x11"
+    # Qt xcb platformunu zorunlu kıl (WebEngine için gerekli).
+    if "QT_QPA_PLATFORM" not in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    # Wayland uyarılarını sustur
+    os.environ.setdefault("QT_LOGGING_RULES", "*.warning=false")
+
+# ---------------------------------------------------------------------------
+# Intercept -m for submodule execution (fixes gallery-dl/yt-dlp subprocesses)
+# ---------------------------------------------------------------------------
+if len(sys.argv) >= 3 and sys.argv[1] == "-m":
+    import runpy
+    module_name = sys.argv[2]
+    sys.argv = [sys.argv[0]] + sys.argv[3:]
+    runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
 # Ensure `from src.*` imports work when running as `python src/main.py`
 # ---------------------------------------------------------------------------
 _project_root = str(Path(__file__).resolve().parent.parent)
@@ -652,6 +677,13 @@ class Bridge:
                 import time
                 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                
+                # Fix for 64-bit pointers being truncated to 32-bit integers
+                user32.GetClipboardData.restype = ctypes.c_void_p
+                kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+                kernel32.GlobalLock.restype = ctypes.c_void_p
+                kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
                 opened = False
                 for _ in range(5):
                     if user32.OpenClipboard(0):

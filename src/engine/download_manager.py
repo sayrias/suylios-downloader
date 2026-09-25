@@ -209,8 +209,14 @@ def _get_extractor(url: str):
     from src.extractors.gallery_ext import GalleryDLExtractor
     from src.extractors.ytdlp_ext import YtdlpExtractor
     from src.extractors.cyberdrop_ext import CyberdropDLExtractor
+    from src.extractors.mega_ext import MegaExtractor
 
     url_lower = url.lower()
+
+    # Mega.nz – always use dedicated extractor (yt-dlp doesn't support Mega)
+    if "mega.nz" in url_lower:
+        logger.debug("Mega URL detected, using MegaExtractor: %s", url)
+        return MegaExtractor()
 
     # Reddit linkleri özel RedditExtractor ile işleniyor (gallery-dl 403 ve yt-dlp sonsuz döngü sorunu)
     if "reddit.com" in url_lower or "redd.it" in url_lower:
@@ -224,6 +230,7 @@ def _get_extractor(url: str):
 
     # Order matters: specific site extractors first, then gallery-dl, cyberdrop-dl, and finally yt-dlp.
     for cls in (
+        MegaExtractor,
         GofileExtractor,
         BunkrExtractor,
         PixeldrainExtractor,
@@ -582,7 +589,11 @@ class DownloadManager:
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
-                    if "gofile.io" not in task.url.lower() and "bunkr." not in task.url.lower():
+                    url_l = task.url.lower()
+                    # Mega: yt-dlp cannot handle it — don't fall back, raise immediately
+                    if "mega.nz" in url_l or "mega.co.nz" in url_l:
+                        raise ext_err
+                    elif "gofile.io" not in url_l and "bunkr." not in url_l:
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)
@@ -904,7 +915,11 @@ class DownloadManager:
                     from src.extractors.ytdlp_ext import YtdlpExtractor
 
                     fallback_classes = []
-                    if "gofile.io" not in task.url.lower() and "bunkr." not in task.url.lower():
+                    url_l = task.url.lower()
+                    # Mega: yt-dlp cannot handle it — don't fall back, raise immediately
+                    if "mega.nz" in url_l or "mega.co.nz" in url_l:
+                        raise dl_err
+                    elif "gofile.io" not in url_l and "bunkr." not in url_l:
                         for cls in (GofileExtractor, BunkrExtractor, PixeldrainExtractor, VideoHostExtractor, GalleryDLExtractor, CyberdropDLExtractor, YtdlpExtractor):
                             if cls not in tried_extractors and cls.can_handle(task.url):
                                 fallback_classes.append(cls)

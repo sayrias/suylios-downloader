@@ -199,9 +199,17 @@ HIDDEN_IMPORTS_WIN = [
     "pythonnet",
 ]
 
+# Linux: SADECE GTK backend - Qt tamamen sistem paketine bırakılır
 HIDDEN_IMPORTS_LINUX = [
     "webview.platforms.gtk",
-    "webview.platforms.qt",
+    # webview.platforms.qt KASITLI olarak dahil edilmiyor:
+    # PyQt6 sisteme yüklendiğinden bundle etmek gerekmez.
+    # WebKit2GTK sistem kütpüphanesi olarak mevcut.
+    "gi",
+    "gi.repository",
+    "gi.repository.Gtk",
+    "gi.repository.WebKit2",
+    "gi.repository.GLib",
 ]
 
 # gallery-dl ve yt-dlp core (extractor listesi runtime'da dinamik yükleniyor,
@@ -224,6 +232,15 @@ HIDDEN_IMPORTS_COMMON = [
     "PIL",
     "pystray",
     "mutagen",
+    # Mega.nz
+    "mega",
+    "mega.client",
+    "mega.api",
+    "mega.crypto",
+    "Crypto",
+    "Crypto.Cipher",
+    "Crypto.Cipher.AES",
+    "Crypto.Util",
 ]
 
 
@@ -296,9 +313,7 @@ _QT_EXCLUDES_DIRS = [
 
 _QT_LARGE_LIBS = [
     # WebEngine kendi Chromium motorunu taşıyan devasa kütüphane - 195MB!
-    # pywebview GTK/Qt backend; WebEngineWidgets WebView için gerekli AMA
-    # pywebview zaten sisteminizin GTK WebKit'ini kullanıyor Linux'ta.
-    # Onefile build'de bu lib system Qt'ye link edildiğinden pakete girmesi gerekmez.
+    # Linux'ta GTK kullanacağımız için bunlara ihtiyacımız yok, Portable'da sileceğiz.
     "libQt6WebEngineCore.so*",
     "libQt6WebEngineWidgets.so*",
     "libQt6WebChannel.so*",
@@ -311,6 +326,20 @@ _QT_LARGE_LIBS = [
     "libavutil.so*",
 ]
 
+# share/icons altındaki gereksiz tema klasörleri (~185 MB, 40000+ dosya)
+# Bunlar Qt'nin kendi ikon setleri — uygulama hiç kullanmıyor.
+_SHARE_ICON_EXCLUDES = [
+    "breeze",        # 33 MB, 19000+ dosya
+    "breeze-dark",   # 33 MB, 19000+ dosya
+    "Breeze_Light",  # 46 MB
+    "breeze_cursors", # 46 MB
+    "Adwaita",       # 19 MB
+    "AdwaitaLegacy", # 2 MB
+]
+
+# share/locale — sadece TR ve EN bırak; geri kalanı sil (~20 MB tasarruf)
+_LOCALE_KEEP = {"tr", "en", "en_US", "en_GB", "C"}
+
 
 def _strip_qt(search_root: Path) -> float:
     """Verilen dizin altındaki gereksiz Qt dosyalarını sil. Boyut tasarrufunu MB olarak döndür."""
@@ -319,6 +348,8 @@ def _strip_qt(search_root: Path) -> float:
     def _try_remove(p: Path):
         nonlocal removed_mb
         try:
+            if not p.exists():
+                return
             sz = p.stat().st_size if p.is_file() else sum(
                 f.stat().st_size for f in p.rglob("*") if f.is_file()
             )
@@ -330,32 +361,52 @@ def _strip_qt(search_root: Path) -> float:
         except Exception:
             pass
 
-    # 1) Büyük klasörleri / prefix'leri sil
-    for rel in _QT_EXCLUDES_DIRS:
-        for match in search_root.rglob(rel.split("/")[-1] + "*" if "/" not in rel else ""):
-            pass  # handled below
-        # Doğrudan prefix arama
-        for match in search_root.rglob("*"):
-            if any(rel.replace("/", os.sep) in str(match) for rel in _QT_EXCLUDES_DIRS):
-                if match.exists():
-                    _try_remove(match)
+    # 1) Qt Quick / QML / WebEngine dizinleri (prefix eşleşmesi ile)
+    for match in list(search_root.rglob("*")):
+        if not match.exists():
+            continue
+        m_str = str(match)
+        if any(rel.replace("/", os.sep) in m_str for rel in _QT_EXCLUDES_DIRS):
+            _try_remove(match)
 
-    # 2) Büyük .so dosyalarını sil
+    # 2) Büyük .so dosyaları
     for pattern in _QT_LARGE_LIBS:
         for match in search_root.rglob(pattern):
             if match.is_file():
                 _try_remove(match)
 
+    # 3) share/icons/breeze* ve Adwaita (~185 MB, 40000+ dosya)
+    for icons_dir in search_root.rglob("icons"):
+        if icons_dir.is_dir():
+            for theme in _SHARE_ICON_EXCLUDES:
+                candidate = icons_dir / theme
+                if candidate.exists():
+                    _try_remove(candidate)
+
+    # 4) share/locale — sadece TR ve EN bırak, geri kalanı sil
+    for locale_dir in search_root.rglob("locale"):
+        if locale_dir.is_dir() and "share" in str(locale_dir):
+            for lang_dir in list(locale_dir.iterdir()):
+                if lang_dir.is_dir() and lang_dir.name not in _LOCALE_KEEP:
+                    _try_remove(lang_dir)
+
+    # 5) share/themes/Breeze* (~1 MB)
+    for themes_dir in search_root.rglob("themes"):
+        if themes_dir.is_dir():
+            for theme in themes_dir.iterdir():
+                if theme.is_dir() and theme.name.lower().startswith("breeze"):
+                    _try_remove(theme)
+
     return removed_mb
 
 
 def _strip_internal(directory: Path):
-    """Onedir _internal içindeki gereksiz Qt dosyalarını temizler."""
+    """Onedir _internal içindeki gereksiz Qt/share dosyalarını temizler."""
     internal = directory / "_internal"
     target = internal if internal.exists() else directory
     removed_mb = _strip_qt(target)
     if removed_mb > 0:
-        print(f"[*] Qt temizliği: -{removed_mb:.0f} MB tasarruf")
+        print(f"[*] Temizlik: -{removed_mb:.0f} MB tasarruf (Qt/icons/locale)")
 
 
 def _build_pyinstaller(name: str, onefile: bool, workpath: Path) -> bool:
@@ -386,9 +437,11 @@ def _build_pyinstaller(name: str, onefile: bool, workpath: Path) -> bool:
     for exc in EXCLUDES:
         cmd += ["--exclude-module", exc]
 
-    # PyQt6 büyük modüllerini exclude et (pywebview onları direkt import etmiyor)
+    # Linux'ta GTK backend kullandığımız için PyQt6'yı TAMAMEN dışlıyoruz (200MB tasarruf!).
+    # Windows'ta ise sadece kullanılmayan WebEngine vb. dışlanıyor.
     qt_module_excludes = [
-        "PyQt6.QtWebEngineWidgets",  # 195MB WebEngine - sistem GTK WebKit kullanılıyor
+        "PyQt6",
+        "PyQt6.QtWebEngineWidgets",
         "PyQt6.QtWebEngineCore",
         "PyQt6.QtWebEngineQuick",
         "PyQt6.QtWebChannel",
@@ -412,9 +465,8 @@ def _build_pyinstaller(name: str, onefile: bool, workpath: Path) -> bool:
         "PyQt6.QtShaderTools",
         "PyQt6.QtSpatialAudio",
         "PyQt6.QtVirtualKeyboard",
-        "PySide6",  # PySide6 varsa onu da dışla
+        "PySide6",
     ] if not IS_WINDOWS else [
-        # Windows'ta da aynı dışlamalar geçerli
         "PyQt6.QtWebEngineWidgets",
         "PyQt6.QtWebEngineCore",
         "PyQt6.QtQuick", "PyQt6.QtQml",
@@ -441,9 +493,20 @@ def _build_pyinstaller(name: str, onefile: bool, workpath: Path) -> bool:
         "--collect-data=yt_dlp",
         "--collect-submodules=cyberdrop_dl",
         "--collect-data=cyberdrop_dl",
-        "--collect-all=webview",
         "--collect-all=curl_cffi",
+        "--collect-submodules=mega",
+        "--collect-all=Crypto",
     ]
+
+    # Webview: Linux'ta GTK-only (PyQt6 çekmemek için collect-all kullanmıyoruz)
+    if IS_WINDOWS:
+        cmd += ["--collect-all=webview"]
+    else:
+        # Sadece Python kaynak dosyalarını topla, PyQt6 backend hariç
+        cmd += [
+            "--collect-data=webview",
+            "--collect-submodules=webview.platforms.gtk",
+        ]
 
     # Windows'a özel
     if IS_WINDOWS:
@@ -499,19 +562,14 @@ def build_portable():
     print("\n" + "="*60)
     print("  1. Taşınabilir ZIP Paketi (Suylios-Portable.zip)")
     print("="*60)
-    # Önce onedir önbelleği dene; yoksa mevcut onefile binary'den portable yap
-    onefile_binary = DIST_DIR / ("Suylios.exe" if IS_WINDOWS else "Suylios")
-    use_onefile_mode = False
-
+    # Her zaman onedir derle - onefile binary'den zip yapmak sıkıştırma sağlamaz
+    # (PyInstaller onefile zaten kendi içinde sıkıştırdığından, ek zip etkisizdir)
     build_out = BUILD_DIR / "SuyliosDownloader"
-    exe_name = "SuyliosDownloader.exe" if IS_WINDOWS else "SuyliosDownloader"
+    exe_name  = "SuyliosDownloader.exe" if IS_WINDOWS else "SuyliosDownloader"
     if build_out.exists() and (build_out / exe_name).exists():
-        print("[*] Onedir önbelleği bulundu, portable için kullanılıyor.")
-    elif onefile_binary.exists():
-        print("[*] Onedir yok ama onefile binary mevcut — onefile'dan portable ZIP oluşturuluyor.")
-        use_onefile_mode = True
+        print("[*] Onedir önbelleği kullanılıyor (yeniden derleme atlandı).")
     else:
-        print("[*] Onedir derleniyor (portable için)...")
+        print("[*] Portable için onedir derleniyor...")
         build_out = build_onedir()
 
     portable_dir = DIST_DIR / "Suylios-Portable"
@@ -520,30 +578,23 @@ def build_portable():
     portable_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        if use_onefile_mode:
-            # Onefile binary'yi doğrudan portable klasörüne koy
-            exe_dst = "suylios.exe" if IS_WINDOWS else "suylios"
-            shutil.copy2(onefile_binary, portable_dir / exe_dst)
+        for item in build_out.iterdir():
+            dst = portable_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dst, symlinks=True, ignore_dangling_symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dst)
+
+        # Kopyalanan _internal içinden de Qt temizliği yap
+        _strip_internal(portable_dir)
+
+        # Yürütülebilir adını düzenle
+        old = portable_dir / exe_name
+        new = portable_dir / ("suylios.exe" if IS_WINDOWS else "suylios")
+        if old.exists() and not new.exists():
+            os.rename(old, new)
             if not IS_WINDOWS:
-                (portable_dir / exe_dst).chmod(0o755)
-        else:
-            for item in build_out.iterdir():
-                dst = portable_dir / item.name
-                if item.is_dir():
-                    shutil.copytree(item, dst, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, dst)
-
-            # Kopyalanan _internal içinden de Qt temizliği yap
-            _strip_internal(portable_dir)
-
-            # Yürütülebilir adını düzenle
-            old = portable_dir / exe_name
-            new = portable_dir / ("suylios.exe" if IS_WINDOWS else "suylios")
-            if old.exists() and not new.exists():
-                os.rename(old, new)
-                if not IS_WINDOWS:
-                    new.chmod(0o755)
+                new.chmod(0o755)
 
         # Dizin yapısı
         (portable_dir / "Downloads").mkdir(exist_ok=True)
@@ -578,6 +629,8 @@ def build_portable():
             for root, _, files in os.walk(portable_dir):
                 for file in files:
                     fp = Path(root) / file
+                    if not fp.exists() and fp.is_symlink():
+                        continue  # Skip dangling symlinks
                     arcname = Path("Suylios-Portable") / fp.relative_to(portable_dir)
                     zf.write(fp, arcname)
 
@@ -683,23 +736,30 @@ def _build_setup_windows(build_out: Path):
     info_tr_file.write_text(INFO_TR, encoding="utf-8")
     info_en_file.write_text(INFO_EN, encoding="utf-8")
 
+    # Inno Setup için Wine ve Türkçe karakter sorununu (Masaüstü) önlemek adına göreceli Windows yolları
+    rel_staging_dir = "dist\\setup-staging"
+    rel_output_dir  = "dist"
+    rel_info_tr     = "build\\info_tr.txt"
+    rel_info_en     = "build\\info_en.txt"
+    rel_icon_file   = "src\\ui\\icon.ico" if icon_file.exists() else ""
+
     iss = INNO_SCRIPT_TEMPLATE.format(
         app_name=APP_NAME, app_version=APP_VERSION,
         app_publisher=APP_PUBLISHER, app_url=APP_URL, app_exe=APP_EXE,
-        default_dir=DEFAULT_DIR, output_dir=str(DIST_DIR),
-        staging_dir=str(staging_dir),
-        info_tr=str(info_tr_file), info_en=str(info_en_file),
-        icon_file=str(icon_file) if icon_file.exists() else "",
+        default_dir=DEFAULT_DIR, output_dir=rel_output_dir,
+        staging_dir=rel_staging_dir,
+        info_tr=rel_info_tr, info_en=rel_info_en,
+        icon_file=rel_icon_file,
     )
-    iss_path = BUILD_DIR / "suylios_setup.iss"
+    iss_path = PROJECT_ROOT / "suylios_setup.iss"
     iss_path.write_text(iss, encoding="utf-8")
 
     print("[*] Inno Setup derleniyor...")
     if IS_LINUX and not IS_WINDOWS:
-        cmd = ["wine", str(iscc), str(iss_path)]
+        cmd = ["wine", str(iscc), "suylios_setup.iss"]
     else:
-        cmd = [str(iscc), str(iss_path)]
-    res = subprocess.run(cmd)
+        cmd = [str(iscc), "suylios_setup.iss"]
+    res = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     shutil.rmtree(staging_dir, ignore_errors=True)
 
     if res.returncode == 0:
@@ -719,31 +779,84 @@ def build_setup():
         if wine_py:
             print(f"[INFO] Wine Python bulundu: {wine_py}")
             print("[*] Wine ile Windows onedir derleniyor...")
-            res = subprocess.run([
+
+            # Linux mutlak yolları Wine Z:\\ formatına çevir
+            def to_wine(p: Path) -> str:
+                return "Z:" + str(p).replace("/", "\\")
+
+            # Wine argümanlarında karakter bozulmasını önlemek için göreceli yollar
+            # PyInstaller spec dosyasını 'build' içine koyduğu için add-data yolları 'build' klasörüne göre (..\) olmalı
+            wine_src_ui  = "..\\src\\ui"
+            wine_main    = "src\\main.py"
+            wine_dist    = "build"
+            wine_work    = "build\\temp_wine_setup"
+            wine_spec    = "build"
+            wine_icon    = "..\\src\\ui\\icon.ico"
+            wine_json    = "..\\SUPPORTED_SITES.json"
+
+            # Remove old build/SuyliosDownloader to prevent Wine PermissionError
+            import shutil
+            shutil.rmtree(BUILD_DIR / "SuyliosDownloader", ignore_errors=True)
+
+            cmd = [
                 "wine", str(wine_py), "-m", "PyInstaller",
                 "--noconfirm", "--onedir", "--windowed",
                 "--name=SuyliosDownloader",
-                f"--add-data=src/ui;ui",
+                f"--icon={wine_icon}",
+                f"--add-data={wine_src_ui};ui",
+            ]
+            if (PROJECT_ROOT / "SUPPORTED_SITES.json").exists():
+                cmd += [f"--add-data={wine_json};."]
+
+            cmd += [
                 "--collect-submodules=gallery_dl",
-                "--collect-submodules=yt_dlp",
                 "--collect-data=gallery_dl",
+                "--collect-submodules=yt_dlp",
                 "--collect-data=yt_dlp",
                 "--collect-submodules=cyberdrop_dl",
+                "--collect-data=cyberdrop_dl",
                 "--collect-all=webview",
                 "--collect-all=pythonnet",
+                "--collect-all=curl_cffi",
+                "--collect-submodules=mega",
+                "--collect-all=Crypto",
                 "--hidden-import=clr",
                 "--hidden-import=webview.platforms.winforms",
                 "--hidden-import=webview.platforms.edgechromium",
-                *[f"--exclude-module={e}" for e in EXCLUDES],
-                f"--distpath={BUILD_DIR}",
-                f"--workpath={BUILD_DIR / 'temp_wine'}",
-                f"--specpath={BUILD_DIR}",
-                "src/main.py",
-            ], cwd=str(PROJECT_ROOT))
-            if res.returncode == 0:
-                _build_setup_windows(BUILD_DIR / "SuyliosDownloader")
+                "--hidden-import=aiohttp",
+                "--hidden-import=aiofiles",
+                "--hidden-import=pystray",
+                "--hidden-import=PIL",
+                "--hidden-import=mutagen",
+                "--exclude-module=unittest",
+                "--exclude-module=test",
+                "--exclude-module=scipy",
+                "--exclude-module=numpy",
+                "--exclude-module=pandas",
+                "--exclude-module=tkinter",
+                "--exclude-module=PyQt6.QtWebEngineWidgets",
+                "--exclude-module=PyQt6.QtWebEngineCore",
+                f"--distpath={wine_dist}",
+                f"--workpath={wine_work}",
+                f"--specpath={wine_spec}",
+                wine_main,
+            ]
+
+            res = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+
+            # Wine exit code is unreliable – check the actual output folder instead
+            wine_out_dir = BUILD_DIR / "SuyliosDownloader"
+            wine_ok = wine_out_dir.exists() and any(wine_out_dir.iterdir())
+
+            if wine_ok:
+                print(f"[OK] Wine derleme tamamlandı: {wine_out_dir}")
+                _build_setup_windows(wine_out_dir)
             else:
-                print("[HATA] Wine derleme başarısız.")
+                print(f"[HATA] Wine derleme başarısız (exit={res.returncode}). "
+                      f"{wine_out_dir} bulunamadı.")
+                if res.returncode != 0:
+                    print("  İpucu: Wine Python'da gerekli kütüphaneler kurulu mu?")
+                    print("  wine C:\\Python313\\python.exe -m pip install pyinstaller pywebview yt-dlp gallery-dl")
         else:
             # Wine Python yok; mevcut Linux onedir'den Wine+Inno ile dene
             print("[UYARI] Wine Python bulunamadı. Mevcut Linux derlemesinden setup.exe oluşturuluyor...")
@@ -765,11 +878,11 @@ def build_onefile():
     print("="*60)
 
     workpath = BUILD_DIR / "temp_onefile"
-    # Linux'ta: Suylios  |  Windows'ta: Suylios.exe
-    out_name = "Suylios"
+    # Linux'ta: Suylios-Linux  |  Windows'ta: Suylios.exe
+    out_name = "Suylios" if IS_WINDOWS else "Suylios-Linux"
     ok = _build_pyinstaller(out_name, onefile=True, workpath=workpath)
     if ok:
-        out_ext = ".exe" if IS_WINDOWS else ""
+        out_ext = ".exe" if IS_WINDOWS else ".bin"
         out = DIST_DIR / f"{out_name}{out_ext}"
         if out.exists():
             if not IS_WINDOWS:
