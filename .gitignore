@@ -42,3 +42,7 @@ cookies.txt
 # ── Node.js ──
 node_modules/
 package-lock.json
+
+# ── Sayrias Collections & Wiki ──
+catalog-bundle.json
+wiki-bundle.json

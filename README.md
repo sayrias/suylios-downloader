@@ -17,6 +17,9 @@
   <a href="SUPPORTED_SITES.md">
     <img src="https://img.shields.io/badge/Supported%20Sites-1775%2B-ff6b9d?style=for-the-badge&logo=airplayvideo&logoColor=ff6b9d&labelColor=0d1117" alt="Supported Sites">
   </a>
+  <a href="https://wiki.sayrias.com/suylios-downloader/v1/overview">
+    <img src="https://img.shields.io/badge/Wiki-Documentation-00b8ff?style=for-the-badge&logo=readme&logoColor=00b8ff&labelColor=0d1117" alt="Wiki Documentation">
+  </a>
 </p>
 
 <br/>
@@ -25,11 +28,18 @@
   <a href="#-overview"><b>🌌 Overview</b></a> •
   <a href="#-key-features--highlights"><b>✨ Features</b></a> •
   <a href="#-interface-preview"><b>📸 Screenshots</b></a> •
+  <a href="https://wiki.sayrias.com/suylios-downloader/v1/overview"><b>📚 Official Wiki</b></a> •
   <a href="SUPPORTED_SITES.md"><b>🌐 Supported Sites</b></a> •
   <a href="#-quick-start-guide"><b>🚀 Quick Start</b></a>
 </p>
 
 <br/>
+
+---
+
+## 📚 Documentation & Wiki
+
+For detailed installation instructions, formatting options, media conversion guides, and troubleshooting, please visit the [**Official Suylios Downloader Wiki**](https://wiki.sayrias.com/suylios-downloader/v1/overview).
 
 ---
 
