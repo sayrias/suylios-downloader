@@ -140,8 +140,47 @@ setup_wine_windows() {
 # .run paketi kaldırıldı - gerek yok
 make_linux_run() { :; }
 
+# ── Rust Hibrit Motoru & Hotfix hazırlığı ──────────────────
+ensure_rust_and_hotfixes() {
+    local target="${1:-linux}" # linux | windows | both
+    if [ -f "$SCRIPT_DIR/hotfixes/tools/build_and_sign.py" ]; then
+        $PY_CMD "$SCRIPT_DIR/hotfixes/tools/build_and_sign.py" --out "$SCRIPT_DIR/hotfixes/dist" >/dev/null 2>&1 || true
+    fi
+
+    if [ -f "$HOME/.cargo/env" ]; then
+        . "$HOME/.cargo/env"
+    fi
+    if ! command -v cargo &>/dev/null || [ ! -f "$SCRIPT_DIR/rust/Cargo.toml" ]; then
+        echo "[UYARI] cargo veya rust/Cargo.toml bulunamadı, Rust motoru atlandı."
+        return 1
+    fi
+
+    mkdir -p "$SCRIPT_DIR/bin"
+
+    if [ "$target" = "linux" ] || [ "$target" = "both" ]; then
+        echo "[RUST] Linux motoru (suylios-engine) derleniyor..."
+        cargo build --manifest-path "$SCRIPT_DIR/rust/Cargo.toml" --release -p suylios-engine && \
+            cp -f "$SCRIPT_DIR/rust/target/release/suylios-engine" "$SCRIPT_DIR/bin/suylios-engine" && \
+            chmod +x "$SCRIPT_DIR/bin/suylios-engine" && \
+            echo "[OK] Hazır: bin/suylios-engine"
+    fi
+
+    if [ "$target" = "windows" ] || [ "$target" = "both" ]; then
+        if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
+            echo "[RUST] Windows motoru (suylios-engine.exe) çapraz derleniyor..."
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+                cargo build --manifest-path "$SCRIPT_DIR/rust/Cargo.toml" --release --target x86_64-pc-windows-gnu -p suylios-engine && \
+                cp -f "$SCRIPT_DIR/rust/target/x86_64-pc-windows-gnu/release/suylios-engine.exe" "$SCRIPT_DIR/bin/suylios-engine.exe" && \
+                echo "[OK] Hazır: bin/suylios-engine.exe"
+        else
+            echo "[UYARI] x86_64-w64-mingw32-gcc yok, Windows suylios-engine.exe çapraz derlenemedi."
+        fi
+    fi
+}
+
 # ── Wine ile Windows EXE (tek dosya) ──────────────────────
 build_windows_wine_onefile() {
+    ensure_rust_and_hotfixes "windows" || true
     WIN_PY=$(find_wine_python)
     echo "[INFO] Wine PyInstaller başlatılıyor..."
 
@@ -152,18 +191,28 @@ build_windows_wine_onefile() {
     WINE_WORK="Z:$(echo "$SCRIPT_DIR/build/temp_wine_onefile" | sed 's|/|\\\\|g')"
     WINE_SPEC="Z:$(echo "$SCRIPT_DIR/build" | sed 's|/|\\\\|g')"
     WINE_ICON="Z:$(echo "$SCRIPT_DIR/src/ui/icon.ico" | sed 's|/|\\\\|g')"
+    WINE_HOTFIXES="Z:$(echo "$SCRIPT_DIR/hotfixes" | sed 's|/|\\\\|g')"
+    WINE_GDL_PLUGINS="Z:$(echo "$SCRIPT_DIR/src/extractors/gdl_plugins" | sed 's|/|\\\\|g')"
+    WINE_RUST_EXE="Z:$(echo "$SCRIPT_DIR/bin/suylios-engine.exe" | sed 's|/|\\\\|g')"
+    WINE_FFMPEG_EXE="Z:$(echo "$SCRIPT_DIR/bin/ffmpeg.exe" | sed 's|/|\\\\|g')"
 
     # Wine Python'da gerekli paketleri kur (henüz kurulmadıysa)
     echo "[INFO] Wine Python bağımlılıkları kontrol ediliyor..."
     wine "$WIN_PY" -m pip install --quiet --upgrade \
-        pyinstaller pywebview yt-dlp gallery-dl requests \
+        pyinstaller pywebview yt-dlp gallery-dl requests curl_cffi \
         aiohttp aiofiles cyberdrop-dl pystray pillow \
         lxml beautifulsoup4 mutagen async-mega-py pycryptodome 2>/dev/null
     echo "[INFO] Wine pip kurulumu tamamlandı."
 
     mkdir -p "$SCRIPT_DIR/dist" "$SCRIPT_DIR/build/temp_wine_onefile" "$SCRIPT_DIR/build"
 
-    WINE_SITES_JSON="Z:$(echo "$SCRIPT_DIR/SUPPORTED_SITES.json" | sed 's|/|\\\\|g')"
+    WINE_SITES_JSON="Z:$(echo "$SCRIPT_DIR/hotfixes/SUPPORTED_SITES.json" | sed 's|/|\\\\|g')"
+
+    EXTRA_WINE_ARGS=()
+    [ -d "$SCRIPT_DIR/hotfixes" ] && EXTRA_WINE_ARGS+=(--add-data "${WINE_HOTFIXES};hotfixes")
+    [ -d "$SCRIPT_DIR/src/extractors/gdl_plugins" ] && EXTRA_WINE_ARGS+=(--add-data "${WINE_GDL_PLUGINS};src/extractors/gdl_plugins")
+    [ -f "$SCRIPT_DIR/bin/suylios-engine.exe" ] && EXTRA_WINE_ARGS+=(--add-binary "${WINE_RUST_EXE};bin")
+    [ -f "$SCRIPT_DIR/bin/ffmpeg.exe" ] && EXTRA_WINE_ARGS+=(--add-binary "${WINE_FFMPEG_EXE};bin")
 
     wine "$WIN_PY" -m PyInstaller \
         --noconfirm --onefile --windowed \
@@ -171,6 +220,7 @@ build_windows_wine_onefile() {
         --icon "$WINE_ICON" \
         --add-data "${WINE_SRC_UI};ui" \
         --add-data "${WINE_SITES_JSON};." \
+        "${EXTRA_WINE_ARGS[@]}" \
         --collect-submodules gallery_dl \
         --collect-data gallery_dl \
         --collect-submodules yt_dlp \
@@ -231,14 +281,15 @@ show_menu() {
     echo "========================================================="
     echo ""
     echo "   1 - Linux Portable  → Suylios-Portable.zip"
-    echo "   2 - Linux Binary    → Suylios-Linux (tek dosya)"
+    echo "   2 - Linux AppImage  → Suylios-Linux.AppImage"
     echo "   3 - Windows EXE     → Wine ile Suylios.exe"
     echo "   4 - Windows Setup   → Wine + Inno Setup installer"
     echo "   5 - Hepsini Derle   → 1+2+3+4 sırayla"
+    echo "   6 - Rust Motoru     → bin/suylios-engine (.exe)"
     echo "   0 - Çıkış"
     echo ""
     echo "========================================================="
-    read -p "Seçiminiz (0-5): " secim
+    read -p "Seçiminiz (0-6): " secim
     echo ""
 
     case "$secim" in
@@ -249,8 +300,8 @@ show_menu() {
             show_menu
             ;;
         2)
-            echo "[INFO] Linux tek dosya binary derleniyor..."
-            $PY_CMD build.py onefile
+            echo "[INFO] Linux AppImage derleniyor..."
+            $PY_CMD build.py appimage
             read -p "Tamamlandı! Enter'a basın..."
             show_menu
             ;;
@@ -290,15 +341,15 @@ show_menu() {
             show_menu
             ;;
         5)
-            LOG_FILE="$SCRIPT_DIR/logs/build-$(date +%Y%m%d-%H%M%S).log"
-            mkdir -p "$SCRIPT_DIR/logs"
+            LOG_FILE="$SCRIPT_DIR/build/logs/build-$(date +%Y%m%d-%H%M%S).log"
+            mkdir -p "$SCRIPT_DIR/build/logs"
             echo "[INFO] Tüm paketler sırayla derleniyor..."
             echo "[INFO] Build logu: $LOG_FILE"
             echo ""
 
-            # 1) Linux binary (önce bu; portable için gerekli)
-            echo "─── [1/4] Linux Tek Dosya Binary ───" | tee -a "$LOG_FILE"
-            $PY_CMD build.py onefile 2>&1 | tee -a "$LOG_FILE"
+            # 1) Linux AppImage (Suylios-Linux.AppImage)
+            echo "─── [1/4] Linux AppImage ───" | tee -a "$LOG_FILE"
+            $PY_CMD build.py appimage 2>&1 | tee -a "$LOG_FILE"
 
             # 2) Linux Portable ZIP
             echo "" | tee -a "$LOG_FILE"
@@ -346,6 +397,11 @@ show_menu() {
             echo "==========================================" | tee -a "$LOG_FILE"
             echo ""
             echo "[LOG] Tam build logu: $LOG_FILE"
+            read -p "Devam etmek için Enter'a basın..."
+            show_menu
+            ;;
+        6)
+            ensure_rust_and_hotfixes "both"
             read -p "Devam etmek için Enter'a basın..."
             show_menu
             ;;

@@ -14,11 +14,15 @@ class GoonboxExtractor(BaseExtractor):
     archive_fmt = "{album_id}_{filename}"
     description = "GoonBox image hosting"
     example = "https://goonbox.cr/a/example"
-    pattern = r"https?://(?:www\.)?goonbox\.(?:cr|cc)/(?:[ai]|img|images?|albums?)/([a-zA-Z0-9_-]+)"
+    pattern = r"https?://(?:www\.)?goonbox\.[a-z]{2,6}/(?:[ai]|img|images?|albums?)/([a-zA-Z0-9_-]+)"
 
     def __init__(self, match):
         BaseExtractor.__init__(self, match)
         self.album_id = match.group(1)
+        from urllib.parse import urlparse
+        parsed = urlparse(self.url)
+        host = (parsed.netloc or "goonbox.cr").removeprefix("www.")
+        self.base_url = f"https://{host}"
 
     def items(self):
         headers = {
@@ -30,12 +34,12 @@ class GoonboxExtractor(BaseExtractor):
         # Check if URL is for a single image (/i/ID, /img/ID, /image/ID, /images/ID)
         if any(x in self.url for x in ("/i/", "/img/", "/image/", "/images/")):
             yield Message.Directory, "", {"album_id": self.album_id, "album_title": self.album_id}
-            url = f"https://goonbox.cr/api/images/{self.album_id}"
+            url = f"{self.base_url}/api/images/{self.album_id}"
             try:
                 data = self.request(url, headers=headers).json()
             except Exception:
                 # Fallback directly if API fails
-                yield Message.Url, f"https://goonbox.cr/img/{self.album_id}", {
+                yield Message.Url, f"{self.base_url}/img/{self.album_id}", {
                     "filename": self.album_id,
                     "extension": "jpg",
                 }
@@ -43,7 +47,7 @@ class GoonboxExtractor(BaseExtractor):
 
             img = data.get("image") or data
             if isinstance(img, dict):
-                img_url = img.get("original_url") or img.get("url") or f"https://goonbox.cr/img/{self.album_id}"
+                img_url = img.get("original_url") or img.get("url") or f"{self.base_url}/img/{self.album_id}"
                 filename = img.get("original_filename") or img.get("filename") or self.album_id
                 if "." in filename:
                     filename, _, ext = filename.rpartition(".")
@@ -63,7 +67,7 @@ class GoonboxExtractor(BaseExtractor):
 
         while page <= total_pages:
             if is_first:
-                url = f"https://goonbox.cr/api/albums/{self.album_id}"
+                url = f"{self.base_url}/api/albums/{self.album_id}"
                 try:
                     data = self.request(url, headers=headers).json()
                 except Exception as e:
@@ -78,7 +82,7 @@ class GoonboxExtractor(BaseExtractor):
                 is_first = False
                 yield Message.Directory, "", {"album_id": self.album_id, "album_title": album_title}
             else:
-                url = f"https://goonbox.cr/api/albums/{self.album_id}/images?page={page}&per_page=100"
+                url = f"{self.base_url}/api/albums/{self.album_id}/images?page={page}&per_page=100"
                 try:
                     data = self.request(url, headers=headers).json()
                 except Exception as e:
@@ -96,7 +100,7 @@ class GoonboxExtractor(BaseExtractor):
                 if not img_url:
                     img_id = img.get("encoded_id") or img.get("id")
                     if img_id:
-                        img_url = f"https://goonbox.cr/img/{img_id}"
+                        img_url = f"{self.base_url}/img/{img_id}"
                 if not img_url:
                     continue
 

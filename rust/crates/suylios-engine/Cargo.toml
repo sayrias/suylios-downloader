@@ -1,0 +1,16 @@
+[package]
+name = "suylios-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "suylios-engine"
+path = "src/main.rs"
+
+[dependencies]
+suylios-core = { path = "../suylios-core" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"

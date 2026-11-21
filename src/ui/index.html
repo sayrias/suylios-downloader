@@ -1,37 +1,43 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="tr" data-theme="basit-beyaz">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Suylios Downloader</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
   <script>
     (function() {
+      var ua = navigator.userAgent || '';
+      if (/Linux/i.test(navigator.platform || ua) && /AppleWebKit/i.test(ua) && !/Chrome|Edg/i.test(ua)) {
+        document.documentElement.classList.add('gtk-perf');
+      }
+      var t = 'basit-beyaz';
       try {
-        var t = localStorage.getItem('suylios_theme') || 'basit-beyaz';
-        document.documentElement.setAttribute('data-theme', t);
+        t = (typeof localStorage !== 'undefined' && localStorage.getItem('suylios_theme')) || 'basit-beyaz';
       } catch(e) {}
+      document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
   <script src="js/qwebchannel.js"></script>
+  <script src="js/api_bridge.js"></script>
 </head>
-<body>
+<body data-theme="basit-beyaz">
   <script>
     (function() {
+      var t = document.documentElement.getAttribute('data-theme') || 'basit-beyaz';
       try {
-        var t = localStorage.getItem('suylios_theme') || 'basit-beyaz';
-        document.body.dataset.theme = t;
+        if (typeof localStorage !== 'undefined') {
+          t = localStorage.getItem('suylios_theme') || t;
+        }
       } catch(e) {}
+      document.body.dataset.theme = t;
     })();
   </script>
   <!-- ══════════════════════════════════════════════════ -->
   <!-- CUSTOM TITLEBAR                                    -->
   <!-- ══════════════════════════════════════════════════ -->
   <header id="titlebar">
-    <div class="titlebar-drag-region pywebview-drag-region">
+    <div class="titlebar-drag-region pywebview-drag-region" data-tauri-drag-region>
       <div class="titlebar-left">
         <div class="titlebar-logo">
           <svg class="logo-icon" viewBox="0 0 24 24" width="18" height="18">
@@ -605,7 +611,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=youtube.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/youtube.com.ico'" class="site-icon-img" alt="YouTube">
+                    <img src="https://www.google.com/s2/favicons?domain=youtube.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/youtube.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="YouTube">
                   </div>
                   <div class="site-title">
                     <h4>YouTube</h4>
@@ -623,7 +629,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=bunkr.si&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/bunkr.si.ico'" class="site-icon-img" alt="Bunkr">
+                    <img src="https://www.google.com/s2/favicons?domain=bunkr.si&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/bunkr.si.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Bunkr">
                   </div>
                   <div class="site-title">
                     <h4>Bunkr</h4>
@@ -641,7 +647,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=gofile.io&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/gofile.io.ico'" class="site-icon-img" alt="Gofile">
+                    <img src="https://www.google.com/s2/favicons?domain=gofile.io&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/gofile.io.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Gofile">
                   </div>
                   <div class="site-title">
                     <h4>Gofile</h4>
@@ -659,7 +665,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=pixeldrain.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/pixeldrain.com.ico'" class="site-icon-img" alt="Pixeldrain">
+                    <img src="https://www.google.com/s2/favicons?domain=pixeldrain.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/pixeldrain.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Pixeldrain">
                   </div>
                   <div class="site-title">
                     <h4>Pixeldrain</h4>
@@ -677,7 +683,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=tiktok.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/tiktok.com.ico'" class="site-icon-img" alt="TikTok">
+                    <img src="https://www.google.com/s2/favicons?domain=tiktok.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/tiktok.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="TikTok">
                   </div>
                   <div class="site-title">
                     <h4>TikTok</h4>
@@ -695,7 +701,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=x.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/x.com.ico'" class="site-icon-img" alt="X">
+                    <img src="https://www.google.com/s2/favicons?domain=x.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/x.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="X">
                   </div>
                   <div class="site-title">
                     <h4>X (Twitter)</h4>
@@ -713,7 +719,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=instagram.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/instagram.com.ico'" class="site-icon-img" alt="Instagram">
+                    <img src="https://www.google.com/s2/favicons?domain=instagram.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/instagram.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Instagram">
                   </div>
                   <div class="site-title">
                     <h4>Instagram</h4>
@@ -731,7 +737,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=reddit.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/reddit.com.ico'" class="site-icon-img" alt="Reddit">
+                    <img src="https://www.google.com/s2/favicons?domain=reddit.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/reddit.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Reddit">
                   </div>
                   <div class="site-title">
                     <h4>Reddit</h4>
@@ -749,7 +755,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=pornhub.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/pornhub.com.ico'" class="site-icon-img" alt="Pornhub">
+                    <img src="https://www.google.com/s2/favicons?domain=pornhub.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/pornhub.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Pornhub">
                   </div>
                   <div class="site-title">
                     <h4>Pornhub</h4>
@@ -767,7 +773,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=xvideos.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/xvideos.com.ico'" class="site-icon-img" alt="XVideos">
+                    <img src="https://www.google.com/s2/favicons?domain=xvideos.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/xvideos.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="XVideos">
                   </div>
                   <div class="site-title">
                     <h4>XVideos</h4>
@@ -785,7 +791,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=rule34.xxx&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/rule34.xxx.ico'" class="site-icon-img" alt="Rule34">
+                    <img src="https://www.google.com/s2/favicons?domain=rule34.xxx&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/rule34.xxx.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Rule34">
                   </div>
                   <div class="site-title">
                     <h4>Rule34</h4>
@@ -803,7 +809,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=hanime.tv&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/hanime.tv.ico'" class="site-icon-img" alt="Hanime">
+                    <img src="https://www.google.com/s2/favicons?domain=hanime.tv&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/hanime.tv.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Hanime">
                   </div>
                   <div class="site-title">
                     <h4>Hanime</h4>
@@ -821,7 +827,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=hitomi.la&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/hitomi.la.ico'" class="site-icon-img" alt="Hitomi">
+                    <img src="https://www.google.com/s2/favicons?domain=hitomi.la&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/hitomi.la.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Hitomi">
                   </div>
                   <div class="site-title">
                     <h4>Hitomi.la</h4>
@@ -839,7 +845,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=e-hentai.org&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/e-hentai.org.ico'" class="site-icon-img" alt="E-Hentai">
+                    <img src="https://www.google.com/s2/favicons?domain=e-hentai.org&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/e-hentai.org.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="E-Hentai">
                   </div>
                   <div class="site-title">
                     <h4>E-Hentai</h4>
@@ -857,7 +863,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=twitch.tv&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/twitch.tv.ico'" class="site-icon-img" alt="Twitch">
+                    <img src="https://www.google.com/s2/favicons?domain=twitch.tv&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/twitch.tv.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Twitch">
                   </div>
                   <div class="site-title">
                     <h4>Twitch</h4>
@@ -875,7 +881,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=vimeo.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/vimeo.com.ico'" class="site-icon-img" alt="Vimeo">
+                    <img src="https://www.google.com/s2/favicons?domain=vimeo.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/vimeo.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Vimeo">
                   </div>
                   <div class="site-title">
                     <h4>Vimeo</h4>
@@ -893,7 +899,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=soundcloud.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/soundcloud.com.ico'" class="site-icon-img" alt="SoundCloud">
+                    <img src="https://www.google.com/s2/favicons?domain=soundcloud.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/soundcloud.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="SoundCloud">
                   </div>
                   <div class="site-title">
                     <h4>SoundCloud</h4>
@@ -911,7 +917,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=dailymotion.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/dailymotion.com.ico'" class="site-icon-img" alt="Dailymotion">
+                    <img src="https://www.google.com/s2/favicons?domain=dailymotion.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/dailymotion.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Dailymotion">
                   </div>
                   <div class="site-title">
                     <h4>Dailymotion</h4>
@@ -929,7 +935,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=imgur.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/imgur.com.ico'" class="site-icon-img" alt="Imgur">
+                    <img src="https://www.google.com/s2/favicons?domain=imgur.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/imgur.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Imgur">
                   </div>
                   <div class="site-title">
                     <h4>Imgur</h4>
@@ -947,7 +953,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=flickr.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/flickr.com.ico'" class="site-icon-img" alt="Flickr">
+                    <img src="https://www.google.com/s2/favicons?domain=flickr.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/flickr.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Flickr">
                   </div>
                   <div class="site-title">
                     <h4>Flickr</h4>
@@ -965,7 +971,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=kemono.su&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/kemono.su.ico'" class="site-icon-img" alt="Kemono">
+                    <img src="https://www.google.com/s2/favicons?domain=kemono.su&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/kemono.su.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Kemono">
                   </div>
                   <div class="site-title">
                     <h4>Kemono</h4>
@@ -983,7 +989,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=coomer.st&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/coomer.st.ico'" class="site-icon-img" alt="Coomer">
+                    <img src="https://www.google.com/s2/favicons?domain=coomer.st&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/coomer.st.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Coomer">
                   </div>
                   <div class="site-title">
                     <h4>Coomer</h4>
@@ -1001,7 +1007,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=erome.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/erome.com.ico'" class="site-icon-img" alt="Erome">
+                    <img src="https://www.google.com/s2/favicons?domain=erome.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/erome.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Erome">
                   </div>
                   <div class="site-title">
                     <h4>Erome</h4>
@@ -1019,7 +1025,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=xhamster.com&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/xhamster.com.ico'" class="site-icon-img" alt="XHamster">
+                    <img src="https://www.google.com/s2/favicons?domain=xhamster.com&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/xhamster.com.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="XHamster">
                   </div>
                   <div class="site-title">
                     <h4>XHamster</h4>
@@ -1037,7 +1043,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=cyberdrop.cr&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/cyberdrop.cr.ico'" class="site-icon-img" alt="Cyberdrop">
+                    <img src="https://www.google.com/s2/favicons?domain=cyberdrop.cr&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/cyberdrop.cr.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Cyberdrop">
                   </div>
                   <div class="site-title">
                     <h4>Cyberdrop</h4>
@@ -1055,7 +1061,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=mega.nz&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/mega.nz.ico'" class="site-icon-img" alt="Mega">
+                    <img src="https://www.google.com/s2/favicons?domain=mega.nz&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/mega.nz.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Mega">
                   </div>
                   <div class="site-title">
                     <h4>Mega.nz</h4>
@@ -1073,7 +1079,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=4chan.org&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/4chan.org.ico'" class="site-icon-img" alt="4chan">
+                    <img src="https://www.google.com/s2/favicons?domain=4chan.org&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/4chan.org.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="4chan">
                   </div>
                   <div class="site-title">
                     <h4>4chan</h4>
@@ -1091,7 +1097,7 @@
               <div class="site-card glass-panel">
                 <div class="site-card-header">
                   <div class="site-logo">
-                    <img src="https://www.google.com/s2/favicons?domain=bsky.app&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/bsky.app.ico'" class="site-icon-img" alt="Bluesky">
+                    <img src="https://www.google.com/s2/favicons?domain=bsky.app&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/bsky.app.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="Bluesky">
                   </div>
                   <div class="site-title">
                     <h4>Bluesky</h4>
@@ -1249,6 +1255,43 @@
 
               <div class="setting-item">
                 <div class="setting-info">
+                  <span class="setting-label">Akıllı Parçalı İndirme (Çoklu Bağlantı)</span>
+                  <span class="setting-desc">Dosya boyutu ve sunucu hızına göre bağlantıları akıllıca yönetip paralel indirir; kalan yavaş parçaları otomatik bölerek hızlandırır</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="setting-segmented-download" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-item" id="segmented-connections-row">
+                <div class="setting-info">
+                  <span class="setting-label">Maksimum Parça Limiti</span>
+                  <span class="setting-desc">Bu yazılan değer üst sınırdır (2 - 32). Uygulama dosya boyutu ve bağlantı hızına göre gerektiğinde yalnızca 2 - 4 parça açar, büyük dosyalarda bu limite kadar ölçekler</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="setting-segmented-connections" class="text-input number-input" value="8" min="2" max="32" step="1" placeholder="8">
+                  <span class="input-suffix">Parça</span>
+                </div>
+              </div>
+              <div class="setting-item" id="segmented-mode-row">
+                <div class="setting-info">
+                  <span class="setting-label">Parçalı İndirme Stratejisi</span>
+                  <span class="setting-desc">Çoklu parçalama yöntemini seçin; seçeneklerin yanındaki (i) ikonundan detaylara bakabilirsiniz</span>
+                </div>
+                <div class="setting-control">
+                  <select id="setting-segmented-mode">
+                    <option value="adaptive" selected data-info="10 MB ve üzeri dosyalarda doğrudan çoklu bağlantıyla başlar. Küçük dosyalarda tek bağlantıyla başlar ve yalnızca hız düşerse otomatik parçalıya geçer.">Dengeli (Akıllı Otomatik)</option>
+                    <option value="large" data-info="5 MB ve üzeri büyük video ve arşivlerde beklemeden yüksek paralel bağlantıyla başlar; küçük görsellere ekstra bağlantı açarak sistemi yormaz.">Büyük Dosya Hızlandırıcı (≥ 5 MB)</option>
+                    <option value="always" data-info="1 MB ve üzeri her dosyada dosya boyutuna göre akıllı sayıda (2 ile tavan limit arası) paralel bağlantıyı baştan itibaren açar.">Sürekli Çoklu Bağlantı (≥ 1 MB)</option>
+                    <option value="turbo" data-info="512 KB üzeri ve parça destekleyen her dosyada beklemeden belirlediğiniz maksimum parça sınırına kadar tüm bağlantıları aynı anda açarak en yüksek hıza çıkar.">Tam Güç / Maksimum Paralel (≥ 512 KB)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-info">
                   <span class="setting-label">Proxy sunucusu</span>
                   <span class="setting-desc">HTTP/SOCKS proxy adresi (isteğe bağlı)</span>
                 </div>
@@ -1315,29 +1358,87 @@
             <div class="settings-group glass-panel about-panel">
               <div class="about-hero">
                 <div class="about-logo">
-                  <svg viewBox="0 0 24 24" width="64" height="64">
+                  <svg viewBox="0 0 24 24" width="44" height="44">
                     <path fill="url(#logoGrad)" d="M12 2L4 7v10l8 5 8-5V7l-8-5zm0 2.18L18 8v8l-6 3.72L6 16V8l6-3.82zM11 10v4.17l-1.59-1.59L8 14l4 4 4-4-1.41-1.42L13 14.17V10h-2z"/>
                   </svg>
                 </div>
                 <h1 class="about-title">Suylios Downloader</h1>
-                <span class="about-version" id="about-version-text">Sürüm 1.4.2</span>
-                <p class="about-desc">Hızlı, güvenilir ve şık medya indirici</p>
+                <span class="about-version" id="about-version-text">Sürüm 2.0.0</span>
+                <p class="about-desc">Hızlı, güvenilir ve modern medya indirici</p>
               </div>
-              <div style="margin: 20px 0; display: flex; justify-content: center;">
-                <button id="btn-manual-check-update" class="btn-primary glow-btn btn-sm" style="display:inline-flex; align-items:center; gap:8px; padding: 10px 22px;">
-                  <svg id="btn-update-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+
+              <div class="about-actions">
+                <button id="btn-manual-check-update" class="btn-primary btn-sm about-check-btn">
+                  <svg id="btn-update-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
                   </svg>
                   <span id="btn-manual-check-update-text">Güncellemeleri Kontrol Et</span>
                 </button>
               </div>
-              <div class="about-links">
-                <a href="https://github.com/sayrias/suylios-downloader" class="about-link" id="link-github" target="_blank">
-                  <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                  GitHub
-                </a>
+
+              <!-- Bileşen & Güncelleme Durumu -->
+              <div id="smart-update-center" class="uc-list">
+                <div class="uc-row">
+                  <div class="uc-row-main">
+                    <div class="uc-icon uc-icon-core" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                      </svg>
+                    </div>
+                    <div class="uc-info">
+                      <div class="uc-title">Uygulama Çekirdeği</div>
+                      <div id="uc-rust-status" class="uc-desc">Hazırlanıyor...</div>
+                    </div>
+                  </div>
+                  <div class="uc-controls">
+                    <span id="uc-rust-badge" class="uc-badge">Hazır</span>
+                  </div>
+                </div>
+
+                <div class="uc-row">
+                  <div class="uc-row-main">
+                    <div class="uc-icon uc-icon-rules" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="m9 12 2 2 4-4"/>
+                      </svg>
+                    </div>
+                    <div class="uc-info">
+                      <div class="uc-title">Site Kuralları</div>
+                      <div id="uc-hotfix-status" class="uc-desc">Desteklenen platform listesi kontrol ediliyor...</div>
+                    </div>
+                  </div>
+                  <div class="uc-controls">
+                    <button id="btn-sync-hotfixes" class="uc-btn">Kuralları Yenile</button>
+                  </div>
+                </div>
+
+                <div class="uc-row">
+                  <div class="uc-row-main">
+                    <div class="uc-icon uc-icon-tools" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                        <line x1="12" y1="22.08" x2="12" y2="12"/>
+                      </svg>
+                    </div>
+                    <div class="uc-info">
+                      <div class="uc-title">İndirme Araçları</div>
+                      <div id="uc-engines-summary" class="uc-desc">Video ve galeri indirme bileşenleri</div>
+                    </div>
+                  </div>
+                  <div class="uc-controls">
+                    <button id="btn-rollback-engines" class="uc-btn hidden" title="Önceki sürüme geri dön">Geri Al</button>
+                    <button id="btn-update-engines" class="uc-btn uc-btn-accent">Araçları Güncelle</button>
+                  </div>
+                </div>
               </div>
-              <div class="about-credits">
+
+              <div class="about-footer">
+                <a href="https://github.com/sayrias/suylios-downloader" class="about-link" id="link-github" target="_blank">
+                  <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                  <span>GitHub</span>
+                </a>
                 <p class="about-copyright">© 2026 Suylios. Tüm hakları saklıdır.</p>
               </div>
             </div>
@@ -1384,7 +1485,7 @@
             <p>İleri tarihli olarak ayarlanmış ve bekleyen tüm indirmeler</p>
           </div>
         </div>
-        <div id="scheduled-list" class="downloads-list" style="padding: 20px 0; width: 100%;">
+        <div id="scheduled-list" class="download-list" style="padding: 20px 0; width: 100%;">
           <!-- Scheduled items injected via JS -->
         </div>
         <div id="scheduled-empty" class="empty-state hidden">
@@ -1445,6 +1546,7 @@
             <span class="card-subtitle"></span>
           </div>
           <div class="card-status">
+            <span class="status-detail-pill hidden"></span>
             <span class="status-badge downloading">İndiriliyor</span>
           </div>
         </div>
@@ -1515,7 +1617,7 @@
           <svg style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); opacity: 0.5;" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         </div>
         <!-- Filtered site list -->
-        <div id="add-site-list" style="height: 400px; max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border-color); border-radius: 12px; padding: 8px; background: var(--bg-secondary); box-shadow: inset 0 2px 6px rgba(0,0,0,0.25); scroll-behavior: smooth;">
+        <div id="add-site-list" style="height: 400px; max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border-color); border-radius: 12px; padding: 8px; background: var(--bg-secondary);">
           <div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">Yükleniyor...</div>
         </div>
         <!-- Selected count -->
@@ -1722,17 +1824,6 @@
     </div>
   </div>
 
-  <style>
-    .custom-drum-picker::-webkit-scrollbar { display: none; }
-    .custom-drum-picker { -ms-overflow-style: none; scrollbar-width: none; }
-    .cal-day-cell { padding: 8px 0; text-align: center; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; color: var(--text-primary); }
-    .cal-day-cell:hover:not(.empty) { background: rgba(168,85,247,0.2); }
-    .cal-day-cell.selected { background: var(--accent-purple, #a855f7) !important; color: #fff !important; font-weight: bold; box-shadow: 0 0 10px rgba(168,85,247,0.5); }
-    .cal-day-cell.empty { pointer-events: none; opacity: 0; }
-    .drum-item { height: 36px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; scroll-snap-align: center; color: var(--text-secondary); transition: all 0.15s; }
-    .drum-item.selected { font-size: 16px; font-weight: bold; color: var(--text-primary); }
-  </style>
-
   <!-- ═══════════════════════════════════════════════ -->
   <!-- CUSTOM DATE & TIME PICKER SUB-MODAL               -->
   <!-- ═══════════════════════════════════════════════ -->
@@ -1793,15 +1884,15 @@
       <div class="modal-body">
         <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;" id="shutdown-modal-desc">Tüm aktif indirmeler tamamlandığında bilgisayara ne yapılsın?</p>
         <div style="display:flex; flex-direction:column; gap:10px;">
-          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:all 0.2s;" class="shutdown-option-card">
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:background-color 0.14s, border-color 0.14s;" class="shutdown-option-card">
             <input type="radio" name="shutdown-mode" value="" style="accent-color:var(--color-accent);" checked>
             <div><div style="font-weight:600; font-size:13px;">❌ Hiçbir şey yapma</div><div style="font-size:11px; color:var(--text-secondary);">İndirmeler bitince uygulama normal çalışmaya devam eder.</div></div>
           </label>
-          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:all 0.2s;" class="shutdown-option-card">
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid var(--border-subtle); transition:background-color 0.14s, border-color 0.14s;" class="shutdown-option-card">
             <input type="radio" name="shutdown-mode" value="sleep" style="accent-color:var(--color-accent);">
             <div><div style="font-weight:600; font-size:13px;">💤 Uyku Moduna Al</div><div style="font-size:11px; color:var(--text-secondary);">Windows uyku moduna alınır. Oturumunuz korunur.</div></div>
           </label>
-          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid rgba(239,68,68,0.3); transition:all 0.2s;" class="shutdown-option-card">
+          <label style="display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px; border-radius:8px; border:1px solid rgba(239,68,68,0.3); transition:background-color 0.14s, border-color 0.14s;" class="shutdown-option-card">
             <input type="radio" name="shutdown-mode" value="shutdown" style="accent-color:#ef4444;">
             <div><div style="font-weight:600; font-size:13px; color:#f87171;">⚡ Bilgisayarı Kapat</div><div style="font-size:11px; color:var(--text-secondary);">60 saniye geri sayım başlar. Abort komutu ile iptal edebilirsiniz.</div></div>
           </label>
@@ -1950,6 +2041,15 @@
   </div>
 
   <!-- Auto-Shutdown Countdown Overlay -->
+  <div id="shutdown-countdown-overlay" class="modal-overlay hidden" style="z-index: 160000;">
+    <div class="modal-content glass-panel" style="max-width: 380px; text-align: center; padding: 24px;">
+      <div id="shutdown-countdown-icon" style="font-size: 36px; margin-bottom: 8px;">⚡</div>
+      <h3 id="shutdown-countdown-title" style="color: var(--text-primary); margin-bottom: 6px;">Sistem Kapatılıyor...</h3>
+      <p id="shutdown-countdown-msg" style="color: var(--text-secondary); font-size: 13px; margin-bottom: 14px;">İndirmeler tamamlandı.</p>
+      <div id="shutdown-countdown-num" style="font-size: 32px; font-weight: 800; color: var(--accent-cyan); margin-bottom: 16px;">60</div>
+      <button id="btn-abort-shutdown" class="btn-danger" style="width: 100%;">İptal Et</button>
+    </div>
+  </div>
 
   <!-- Update Modal -->
   <div id="update-modal" class="modal-overlay hidden" style="z-index: 150000;">
@@ -1996,6 +2096,6 @@
     </div>
   </div>
 
-  <script src="js/app.js?v=1.4.3"></script>
+  <script src="js/app.js?v=2.0.0"></script>
 </body>
 </html>

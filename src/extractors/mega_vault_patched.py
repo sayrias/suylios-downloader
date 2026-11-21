@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import dataclasses
+from typing import TYPE_CHECKING, Final, NamedTuple, cast
+
+from mega.crypto import b64_to_a32, decrypt_key
+
+if TYPE_CHECKING:
+    from mega.data_structures import (
+        ComposedFileKey,
+        GetNodesResponse,
+        Node,
+        NodeID,
+        NodeKey,
+        SharedKeys,
+        UserID,
+    )
+
+
+_EXPORTED: Final = "EXP"
+# An special owner used for exported (AKA public) file/folders
+
+
+class KeyLookup(NamedTuple):
+    full_key: ComposedFileKey | NodeKey
+    share_key: NodeKey | None
+
+
+@dataclasses.dataclass(slots=True, frozen=True)
+class MegaVault:
+    master_key: tuple[int, ...] = ()
+
+    _shared_keys: dict[UserID, SharedKeys] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _ = self._shared_keys.setdefault(_EXPORTED, {})
+
+    def update(self, api_resp: GetNodesResponse) -> None:
+        """Parse and update keys not associated with an user"""
+
+        new_keys: SharedKeys = {}
+        for share_key in api_resp["ok"]:
+            node_id, key = share_key["h"], share_key["k"]
+            new_keys[node_id] = decrypt_key(b64_to_a32(key), self.master_key)
+
+        for share_target in api_resp["s"]:
+            node_id, owner = share_target["h"], share_target["u"]
+            if key := new_keys.get(node_id):
+                self._shared_keys.setdefault(owner, {})[node_id] = key
+
+    def __getitem__(self, node: Node) -> KeyLookup:
+        share_key: tuple[int, ...] | None = None
+
+        # my files/folders
+        if node.owner in node.keys:
+            full_key = decrypt_key(b64_to_a32(node.keys[node.owner]), self.master_key)
+
+        # folders shared with me
+        elif node.share_owner and node.share_key and node.id in node.keys:
+            share_key = decrypt_key(b64_to_a32(node.share_key), self.master_key)
+            full_key = decrypt_key(b64_to_a32(node.keys[node.id]), share_key)
+            self._shared_keys.setdefault(node.share_owner, {})[node.id] = share_key
+
+        # files shared with me
+        elif node.owner in self._shared_keys:
+            real_node_id = next(node_id for node_id in node.keys if node_id in self._shared_keys[node.owner])
+            share_key = self._shared_keys[node.owner][real_node_id]
+            full_key = decrypt_key(b64_to_a32(node.keys[real_node_id]), share_key)
+
+        # public files/folders
+        elif (exported := self._shared_keys[_EXPORTED]) and (
+            node.id in exported or any(p in exported for p in node.keys)
+        ):
+            candidates = [nid for nid in node.keys if nid in exported and nid != node.id]
+            if candidates:
+                real_node_id = candidates[-1]
+            elif node.id in exported:
+                real_node_id = node.id
+            else:
+                raise RuntimeError(f"We do not have keys for {node = }")
+
+            share_key = exported[real_node_id]
+            full_key = decrypt_key(b64_to_a32(node.keys[real_node_id]), share_key)
+
+        else:
+            raise RuntimeError(f"We do not have keys for {node = }")
+
+        if len(full_key) not in (4, 8):
+            raise RuntimeError(f"Invalid key len found for node {node.id} ({len(full_key)})")
+
+        return KeyLookup(cast("ComposedFileKey | NodeKey", full_key), share_key)
+
+    def save_public_key(self, node_id: NodeID, share_key: tuple[int, ...]) -> None:
+        self._shared_keys[_EXPORTED][node_id] = share_key

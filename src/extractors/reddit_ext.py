@@ -6,9 +6,11 @@ by directly accessing the Reddit JSON API with proper browser headers.
 This completely bypasses gallery-dl (403) and yt-dlp (infinite redirect loop).
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -16,7 +18,8 @@ from urllib.parse import urlparse
 
 import requests
 
-from src.extractors.base_extractor import BaseExtractor, ExtractionError
+from src.extractors.base_extractor import BaseExtractor, ExtractionCancelled, ExtractionError
+from src.extractors.fast_downloader import _wait_if_paused
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,35 @@ _HEADERS = {
 
 class RedditExtractor(BaseExtractor):
     """Reddit-specific extractor for gallery and video posts."""
+
+    def __init__(self) -> None:
+        self._session = requests.Session()
+        self._session.headers.update(_HEADERS)
+        self._img_sessions: list[requests.Session] = []
+        self._img_pool_lock = threading.Lock()
+
+    def _borrow_img_session(self) -> requests.Session:
+        lock = getattr(self, "_img_pool_lock", None)
+        if lock is not None:
+            with lock:
+                if self._img_sessions:
+                    return self._img_sessions.pop()
+        sess = requests.Session()
+        # Resim indirirken Accept: text/html göndermiyoruz, aksi takdirde Reddit bizi HTML sarmalayıcısına yönlendirir
+        sess.headers.update({"User-Agent": _HEADERS["User-Agent"]})
+        return sess
+
+    def _return_img_session(self, sess: requests.Session) -> None:
+        lock = getattr(self, "_img_pool_lock", None)
+        if lock is not None:
+            with lock:
+                if len(self._img_sessions) < 4:
+                    self._img_sessions.append(sess)
+                    return
+        try:
+            sess.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Capability
@@ -65,39 +97,55 @@ class RedditExtractor(BaseExtractor):
 
     def _fetch_post_json(self, post_id: str) -> dict[str, Any]:
         """Fetch post data from Reddit JSON API."""
-        session = requests.Session()
-        session.headers.update(_HEADERS)
-        
-        # 403 engelini aşmak için önce HTML sayfasını yükleyip cookie/session alıyoruz
-        try:
-            session.get(f"https://old.reddit.com/comments/{post_id}/", timeout=15)
-        except Exception as exc:
-            logger.debug("Reddit session pre-fetch failed: %s", exc)
+        session = getattr(self, "_session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update(_HEADERS)
+            self._session = session
 
         urls_to_try = [
             f"https://old.reddit.com/comments/{post_id}/.json?limit=0&raw_json=1",
             f"https://www.reddit.com/comments/{post_id}/.json?limit=0&raw_json=1",
         ]
         last_err = None
-        for api_url in urls_to_try:
-            try:
-                resp = session.get(api_url, timeout=15, allow_redirects=True)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, list) and len(data) > 0:
-                        children = data[0].get("data", {}).get("children", [])
-                        if children:
-                            return children[0].get("data", {})
-                    elif isinstance(data, dict):
-                        children = data.get("data", {}).get("children", [])
-                        if children:
-                            return children[0].get("data", {})
-                else:
-                    last_err = f"HTTP {resp.status_code}"
-                    logger.warning("Reddit API %s returned %s", api_url, resp.status_code)
-            except Exception as exc:
-                last_err = str(exc)
-                logger.warning("Reddit API error for %s: %s", api_url, exc)
+
+        def _try_json_urls() -> Optional[dict[str, Any]]:
+            nonlocal last_err
+            for api_url in urls_to_try:
+                try:
+                    resp = session.get(api_url, timeout=15, allow_redirects=True)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, list) and len(data) > 0:
+                            children = data[0].get("data", {}).get("children", [])
+                            if children:
+                                return children[0].get("data", {})
+                        elif isinstance(data, dict):
+                            children = data.get("data", {}).get("children", [])
+                            if children:
+                                return children[0].get("data", {})
+                    else:
+                        last_err = f"HTTP {resp.status_code}"
+                        logger.warning("Reddit API %s returned %s", api_url, resp.status_code)
+                except Exception as exc:
+                    last_err = str(exc)
+                    logger.warning("Reddit API error for %s: %s", api_url, exc)
+            return None
+
+        # Önce doğrudan .json uç noktalarını dene (tam HTML GET maliyetinden kaçın)
+        post_data = _try_json_urls()
+        if post_data is not None:
+            return post_data
+
+        # 403 vb. engellerde fallback olarak HTML sayfasından cookie/session alıp tekrar dene
+        try:
+            session.get(f"https://old.reddit.com/comments/{post_id}/", timeout=15)
+        except Exception as exc:
+            logger.debug("Reddit session pre-fetch failed: %s", exc)
+        else:
+            post_data = _try_json_urls()
+            if post_data is not None:
+                return post_data
 
         raise ExtractionError(f"Reddit API erişilemedi (post: {post_id}): {last_err}")
 
@@ -241,13 +289,19 @@ class RedditExtractor(BaseExtractor):
             return self._download_via_ytdlp(url, output_path, format_id, progress_hook, **kwargs)
 
         # Galeri ve tekli resim postları için doğrudan indirme
-        return self._download_images(url, output_path, progress_hook)
+        return self._download_images(
+            url, output_path, progress_hook,
+            cancel_event=kwargs.get("cancel_event"),
+            pause_event=kwargs.get("pause_event"),
+        )
 
     def _download_images(
         self,
         url: str,
         output_path: str,
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
+        cancel_event: Optional[Any] = None,
+        pause_event: Optional[Any] = None,
     ) -> str:
         """Download gallery images directly via requests."""
         post_id = self._extract_post_id(url) or "reddit"
@@ -298,77 +352,122 @@ class RedditExtractor(BaseExtractor):
         if not images:
             raise ExtractionError("Reddit postundan indirilebilecek medya bulunamadı.")
 
+        if pause_event is None and progress_hook is not None:
+            task_obj = getattr(progress_hook, "_task", None)
+            if task_obj is not None:
+                pause_event = getattr(task_obj, "_pause_event", None)
+
         total = len(images)
-        last_file = ""
-        downloaded_bytes_total = 0
-        last_update_time = time.time()
-        last_bytes_for_speed = 0
-        current_speed = 0
+        lock = threading.Lock()
+        stop_flag = threading.Event()
+        state: dict[str, Any] = {
+            "downloaded_bytes": 0,
+            "completed": 0,
+            "last_file": "",
+            "last_update": time.monotonic(),
+            "last_bytes": 0,
+            "speed": 0.0,
+        }
 
-        for idx, (img_url, filename) in enumerate(images, 1):
+        def _download_one(img_url: str, filename: str) -> None:
+            if stop_flag.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                raise ExtractionCancelled("İndirme iptal edildi.")
+            _wait_if_paused(pause_event, cancel_event)
             filepath = dest / filename
+            sess = self._borrow_img_session()
             try:
-                # Resim indirirken Accept: text/html göndermiyoruz, aksi takdirde Reddit bizi HTML sarmalayıcısına yönlendirir
-                img_headers = {"User-Agent": _HEADERS["User-Agent"]}
-                resp = requests.get(img_url, headers=img_headers, timeout=30, stream=True)
-                resp.raise_for_status()
+                with sess.get(img_url, timeout=30, stream=True) as resp:
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=131072):
+                            if stop_flag.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                                raise ExtractionCancelled("İndirme iptal edildi.")
+                            _wait_if_paused(pause_event, cancel_event)
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            chunk_len = len(chunk)
+                            hook_payload = None
+                            with lock:
+                                state["downloaded_bytes"] += chunk_len
+                                if progress_hook:
+                                    now = time.monotonic()
+                                    time_diff = now - state["last_update"]
+                                    if time_diff > 0.25:
+                                        sp = (state["downloaded_bytes"] - state["last_bytes"]) / time_diff
+                                        state["speed"] = sp
+                                        state["last_update"] = now
+                                        state["last_bytes"] = state["downloaded_bytes"]
+                                        cur_idx = min(total, state["completed"] + 1)
+                                        hook_payload = {
+                                            "status": "downloading",
+                                            "item_index": cur_idx,
+                                            "item_count": total,
+                                            "fragment_index": cur_idx,
+                                            "fragment_count": total,
+                                            "downloaded_bytes": state["downloaded_bytes"],
+                                            "total_bytes": 0,
+                                            "speed": sp,
+                                            "eta": 0,
+                                            "filename": str(filepath),
+                                        }
+                            if hook_payload is not None and progress_hook:
+                                progress_hook(hook_payload)
 
-                with open(filepath, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=32768):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded_bytes_total += len(chunk)
-                        
-                        now = time.time()
-                        time_diff = now - last_update_time
-                        if progress_hook and time_diff > 0.5:
-                            current_speed = (downloaded_bytes_total - last_bytes_for_speed) / time_diff
-                            progress_hook({
-                                "status": "downloading",
-                                "item_index": idx,
-                                "item_count": total,
-                                "fragment_index": idx,
-                                "fragment_count": total,
-                                "downloaded_bytes": downloaded_bytes_total,
-                                "total_bytes": 0,
-                                "speed": current_speed,
-                                "eta": 0,
-                                "filename": str(filepath),
-                            })
-                            last_update_time = now
-                            last_bytes_for_speed = downloaded_bytes_total
-
-                last_file = str(filepath)
-                logger.info("Downloaded %d/%d: %s", idx, total, filename)
-
-                if progress_hook:
-                    now = time.time()
-                    time_diff = now - last_update_time
-                    if time_diff > 0.1: # Sadece 100ms'den uzun sürmüşse güncelleyelim
-                        current_speed = (downloaded_bytes_total - last_bytes_for_speed) / time_diff
-                        last_update_time = now
-                        last_bytes_for_speed = downloaded_bytes_total
-
-                    progress_hook({
-                        "status": "downloading",
-                        "item_index": idx,
-                        "item_count": total,
-                        "fragment_index": idx,
-                        "fragment_count": total,
-                        "downloaded_bytes": downloaded_bytes_total,
-                        "total_bytes": 0,
-                        "speed": current_speed,
-                        "eta": 0,
-                        "filename": last_file,
-                    })
-
+                hook_payload = None
+                with lock:
+                    state["completed"] += 1
+                    state["last_file"] = str(filepath)
+                    done_cnt = state["completed"]
+                    if progress_hook:
+                        now = time.monotonic()
+                        time_diff = now - state["last_update"]
+                        if time_diff > 0.1:
+                            state["speed"] = (state["downloaded_bytes"] - state["last_bytes"]) / time_diff
+                            state["last_update"] = now
+                            state["last_bytes"] = state["downloaded_bytes"]
+                        hook_payload = {
+                            "status": "downloading",
+                            "item_index": done_cnt,
+                            "item_count": total,
+                            "fragment_index": done_cnt,
+                            "fragment_count": total,
+                            "downloaded_bytes": state["downloaded_bytes"],
+                            "total_bytes": 0,
+                            "speed": state["speed"],
+                            "eta": 0,
+                            "filename": str(filepath),
+                        }
+                logger.info("Downloaded %d/%d: %s", done_cnt, total, filename)
+                if hook_payload is not None and progress_hook:
+                    progress_hook(hook_payload)
+            except ExtractionCancelled:
+                stop_flag.set()
+                try:
+                    filepath.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
             except Exception as exc:
-                if exc.__class__.__name__ == "_CancelledError":
-                    raise
+                if exc.__class__.__name__ == "_CancelledError" or (
+                    cancel_event is not None and cancel_event.is_set()
+                ):
+                    stop_flag.set()
+                    try:
+                        filepath.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise ExtractionCancelled("İndirme iptal edildi.") from exc
                 logger.warning("Failed to download %s: %s", img_url, exc)
+            finally:
+                self._return_img_session(sess)
 
-        if not last_file:
+        with ThreadPoolExecutor(max_workers=min(3, total)) as pool:
+            futs = [pool.submit(_download_one, img_url, filename) for img_url, filename in images]
+            for fut in futs:
+                fut.result()
+
+        if not state["last_file"]:
             raise ExtractionError("Reddit galeri indirmesi başarısız – hiçbir dosya indirilemedi.")
 
         if progress_hook:

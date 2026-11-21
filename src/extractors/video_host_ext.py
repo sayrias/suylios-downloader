@@ -11,6 +11,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urljoin
 
 try:
     from curl_cffi import requests
@@ -35,22 +36,40 @@ class VideoHostExtractor(BaseExtractor):
     """Universal high-speed extractor for Streamtape and popular video hosting mirrors."""
 
     def __init__(self) -> None:
-        self._session = requests.Session(impersonate="chrome124") if hasattr(requests, "Session") else requests.Session()
+        try:
+            self._session = requests.Session(impersonate="chrome124")
+        except TypeError:
+            self._session = requests.Session()
+        if hasattr(self._session, "headers"):
+            self._session.headers.update({"Connection": "keep-alive"})
         self._cached_info: Optional[Dict[str, Any]] = None
 
     @staticmethod
     def can_handle(url: str) -> bool:
-        """Check if URL domain matches Streamtape or other video hosts."""
+        """Check if URL domain matches Streamtape or other video hosts (including live hotfix manifest domains)."""
         if not url:
             return False
         url_lower = url.lower()
-        return any(domain in url_lower for domain in VIDEO_HOST_DOMAINS)
+        if any(domain in url_lower for domain in VIDEO_HOST_DOMAINS):
+            return True
+        try:
+            from src.engine.site_registry import site_registry
+            vhosts = (site_registry.get_site_rule("video_hosts")) or {}
+            for vh_cfg in vhosts.values():
+                if isinstance(vh_cfg, dict):
+                    for d in (vh_cfg.get("domains") or []):
+                        if str(d).lower() in url_lower:
+                            return True
+        except Exception:
+            pass
+        return False
 
     def _get_headers(self, referer: str = "") -> Dict[str, str]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9,tr;q=0.8",
+            "Connection": "keep-alive",
         }
         if referer:
             headers["Referer"] = referer
@@ -134,14 +153,38 @@ class VideoHostExtractor(BaseExtractor):
         if not video_url:
             raise ExtractionError("Streamtape video URL adresi (robotlink) çözülemedi. Video silinmiş veya korumalı olabilir.")
 
-        # Resolve exact redirect target using the session cookies
+        # Resolve exact redirect target using a lightweight Range 0-0 probe
+        # (avoids full-body GET while preserving keep-alive session cookies)
         direct_url = video_url
+        r_redirect = None
         try:
-            r_redirect = self._session.get(video_url, headers=self._get_headers(referer=url), allow_redirects=False, timeout=10)
-            if "location" in r_redirect.headers:
-                direct_url = r_redirect.headers["location"]
+            probe_headers = self._get_headers(referer=url)
+            probe_headers["Range"] = "bytes=0-0"
+            r_redirect = self._session.get(
+                video_url,
+                headers=probe_headers,
+                allow_redirects=False,
+                stream=True,
+                timeout=10,
+            )
+            loc = r_redirect.headers.get("location") or r_redirect.headers.get("Location")
+            if loc:
+                direct_url = urljoin(video_url, loc)
+            elif getattr(r_redirect, "status_code", 0) == 206:
+                try:
+                    clen = int(r_redirect.headers.get("content-length") or 0)
+                    if 0 < clen <= 1024:
+                        _ = r_redirect.content
+                except Exception:
+                    pass
         except Exception as exc:
             logger.warning("Streamtape redirect çözme uyarısı (%s), get_video linkiyle devam ediliyor...", exc)
+        finally:
+            if r_redirect is not None and hasattr(r_redirect, "close"):
+                try:
+                    r_redirect.close()
+                except Exception:
+                    pass
 
         logger.info("Streamtape resolved direct MP4: %s -> %s", title, direct_url)
 
@@ -268,11 +311,16 @@ class VideoHostExtractor(BaseExtractor):
                 headers=req_headers,
                 progress_hook=progress_hook,
                 cancel_event=cancel_event,
+                pause_event=kwargs.get("pause_event"),
                 display_name=filename,
-                num_workers=32,
+                num_workers=None,
             )
             return str(target_path)
+        except ExtractionCancelled:
+            raise
         except Exception as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExtractionCancelled("İndirme kullanıcı tarafından iptal edildi.") from exc
             logger.warning("Fast downloader hatası (%s), normal oturum akışıyla indiriliyor...", exc)
             return self._stream_download_fallback(direct_url, target_path, req_headers, progress_hook, cancel_event)
 

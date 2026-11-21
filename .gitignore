@@ -1,7 +1,13 @@
 # ── Derleme çıktıları ──
 build/
 dist/
+target/
+rust/target/
 *.spec
+bin/suylios-engine
+bin/suylios-engine.exe
+hotfixes/dist/
+logs/
 
 # ── Python ──
 __pycache__/
@@ -46,3 +52,8 @@ package-lock.json
 # ── Sayrias Collections & Wiki ──
 catalog-bundle.json
 wiki-bundle.json
+
+# ── Mimari ve Güncelleme Planları (Yerel / Gizli) ──
+plans/
+RELEASE_NOTES.md
+

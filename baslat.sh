@@ -77,13 +77,31 @@ if ! command -v ffmpeg &> /dev/null && [ ! -f "bin/ffmpeg" ]; then
     echo ""
 fi
 
+# 4.5. Hotfix Manifest ve Rust Hibrit Motoru (suylios-engine) Kontrolü
+if [ ! -f "hotfixes/dist/hotfix-manifest.json" ] && [ -f "hotfixes/tools/build_and_sign.py" ]; then
+    python hotfixes/tools/build_and_sign.py --out hotfixes/dist >/dev/null 2>&1 || true
+fi
+
+if [ -f "$HOME/.cargo/env" ]; then
+    . "$HOME/.cargo/env"
+fi
+if [ ! -f "bin/suylios-engine" ] && command -v cargo &> /dev/null && [ -f "rust/Cargo.toml" ]; then
+    echo "[INFO] Rust Hibrit Motoru (suylios-engine) derleniyor..."
+    mkdir -p bin
+    if cargo build --manifest-path rust/Cargo.toml --release -p suylios-engine; then
+        cp -f rust/target/release/suylios-engine bin/suylios-engine
+        echo "[INFO] Rust Hibrit Motoru hazir: bin/suylios-engine"
+    fi
+fi
+
 # 5. Uygulamayı Başlat
-echo "[INFO] Uygulama çalıştırılıyor (python3 src/main.py)..."
+echo "[INFO] Uygulama çalıştırılıyor (Hibrit Rust Çekirdeği + Arayüz)..."
 echo ""
 
-# Qt WebEngine / glibc yığın çakışması düzeltmesi
+# Qt WebEngine / WebKitGTK / glibc yığın çakışması düzeltmesi
 export MALLOC_CHECK_=0
 export PYTHONMALLOC=malloc
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
 
 python3 src/main.py
 EXIT_CODE=$?

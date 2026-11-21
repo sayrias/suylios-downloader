@@ -135,6 +135,7 @@ class DownloadTask:
     item_count: int = 0
     archive_title: str = ""        # original playlist/archive title
     eta: int = 0                   # seconds remaining
+    status_detail: str = ""        # live stage pill shown alongside status badge
     error_message: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # v1.2.0 – Trimming / scheduling / metadata
@@ -175,6 +176,7 @@ class DownloadTask:
             "item_count": self.item_count,
             "archive_title": self.archive_title,
             "eta": self.eta,
+            "status_detail": self.status_detail,
             "error_message": self.error_message,
             "created_at": self.created_at,
             "start_time": self.start_time,
@@ -265,6 +267,8 @@ class DownloadManager:
         self._tasks: dict[str, DownloadTask] = {}
         self._ordered_ids: list[str] = []
         self._lock = threading.RLock()
+        self._slot_cond = threading.Condition(self._lock)
+        self._meta_sem = threading.Semaphore(4)
         self._pool = ThreadPoolExecutor(
             max_workers=1000, thread_name_prefix="dl",
         )
@@ -274,6 +278,7 @@ class DownloadManager:
         """Update the max concurrent downloads pool dynamically."""
         with self._lock:
             logger.info("Updating DownloadManager max concurrent preference to %d", new_concurrent)
+            self._slot_cond.notify_all()
     # Public API
     # ------------------------------------------------------------------
 
@@ -358,6 +363,7 @@ class DownloadManager:
                         top_t._is_actually_downloading = True
                         top_t._pause_event.set()
                         logger.info("Sequential mode reorder: resumed top priority task %s", top_task_id)
+            self._slot_cond.notify_all()
 
 
     def add_batch_tasks(
@@ -414,39 +420,57 @@ class DownloadManager:
             logger.info("Scheduled task %s starting now.", task.id)
 
     def pause_task(self, task_id: str) -> bool:
-        """Pause a running download.  Returns ``True`` on success."""
-        task = self._get(task_id)
-        if task and task.status == TaskStatus.DOWNLOADING:
-            task._pause_event.clear()
-            task.status = TaskStatus.PAUSED
-            logger.info("Task %s paused.", task_id)
-            return True
+        """Pause a running or queued download.  Returns ``True`` on success."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status in (TaskStatus.DOWNLOADING, TaskStatus.QUEUED):
+                task._pause_event.clear()
+                task.status = TaskStatus.PAUSED
+                task.status_detail = ""
+                task.speed = 0.0
+                task.eta = 0
+                self._slot_cond.notify_all()
+                logger.info("Task %s paused.", task_id)
+                return True
         return False
 
     def resume_task(self, task_id: str) -> bool:
         """Resume a paused download.  Returns ``True`` on success."""
-        task = self._get(task_id)
-        if task and task.status == TaskStatus.PAUSED:
-            task.status = TaskStatus.DOWNLOADING
-            task._pause_event.set()
-            logger.info("Task %s resumed.", task_id)
-            return True
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status == TaskStatus.PAUSED:
+                task.status = (
+                    TaskStatus.DOWNLOADING
+                    if getattr(task, "_is_actually_downloading", False)
+                    else TaskStatus.QUEUED
+                )
+                task._pause_event.set()
+                self._slot_cond.notify_all()
+                logger.info("Task %s resumed.", task_id)
+                return True
         return False
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancel a running or queued download."""
-        task = self._get(task_id)
-        if task and task.status in (
-            TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.PAUSED,
-        ):
-            task._cancel_event.set()
-            task._pause_event.set()          # unblock if paused
-            task.status = TaskStatus.CANCELLED
-            logger.info("Task %s cancelled.", task_id)
-            # Also immediately kill the gallery-dl subprocess if one is running
+        cancelled = False
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task and task.status in (
+                TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.PAUSED,
+            ):
+                task._cancel_event.set()
+                task._pause_event.set()          # unblock if paused
+                task.status = TaskStatus.CANCELLED
+                task.status_detail = ""
+                task.speed = 0.0
+                task.eta = 0
+                self._slot_cond.notify_all()
+                logger.info("Task %s cancelled.", task_id)
+                cancelled = True
+        if cancelled:
+            # Kill subprocess outside lock to avoid blocking other tasks or UI polling
             _kill_proc_for_task(task_id)
-            return True
-        return False
+        return cancelled
 
     def remove_task(self, task_id: str) -> bool:
         """Remove a task from the list (canceling it if active)."""
@@ -458,6 +482,7 @@ class DownloadManager:
                 del self._tasks[task_id]
                 if task_id in self._ordered_ids:
                     self._ordered_ids.remove(task_id)
+                self._slot_cond.notify_all()
         # Kill subprocess outside lock to avoid deadlock
         _kill_proc_for_task(task_id)
         return True
@@ -480,6 +505,7 @@ class DownloadManager:
             task.eta = 0
             task.item_index = 0
             task.item_count = 0
+            task.status_detail = ""
             task.error_message = ""
             task.filename = ""
             task._cancel_event.clear()
@@ -493,12 +519,14 @@ class DownloadManager:
         """Return a JSON-serialisable list of all task snapshots."""
         with self._lock:
             result = []
+            seen_ids = set()
             for tid in self._ordered_ids:
-                if tid in self._tasks:
+                if tid in self._tasks and tid not in seen_ids:
+                    seen_ids.add(tid)
                     result.append(self._tasks[tid].to_dict())
             # Fallback for any tasks not in _ordered_ids
             for tid, t in self._tasks.items():
-                if tid not in self._ordered_ids:
+                if tid not in seen_ids:
                     result.append(t.to_dict())
             return result
 
@@ -575,10 +603,19 @@ class DownloadManager:
             # ---- 2.  Extract metadata ----
             logger.info("Task %s – extracting metadata…", task.id)
             try:
-                task.status = TaskStatus.DOWNLOADING
+                task._pause_event.wait()
+                if task._cancel_event.is_set():
+                    return
+                with self._lock:
+                    if task._cancel_event.is_set():
+                        return
+                    if task._pause_event.is_set():
+                        task.status = TaskStatus.DOWNLOADING
+                        task.status_detail = "Sayfa bilgisi alınıyor..."
                 tried_extractors = {extractor.__class__}
                 try:
-                    info = extractor.extract_info(task.url)
+                    with self._meta_sem:
+                        info = extractor.extract_info(task.url)
                 except Exception as ext_err:
                     from src.extractors.gofile import GofileExtractor
                     from src.extractors.bunkr import BunkrExtractor
@@ -678,56 +715,12 @@ class DownloadManager:
                                 default_folder = cs.get("folder") or cs.get("name")
                                 break
 
-                    # 2. Check hardcoded sites if no custom site matched
+                    # 2. Tek Merkez SiteRegistry ile platform ve alt klasör çözümlemesi
+                    from src.engine.site_registry import site_registry
+                    resolved_site = site_registry.resolve_url(task.url)
                     if not site_key:
-                        if any(x in url_lower for x in ("youtube", "youtu.be", "ytimg")):
-                            site_key = "youtube"
-                            default_folder = "YouTube"
-                        elif "bunkr" in url_lower:
-                            site_key = "bunkr"
-                            default_folder = "Bunkr"
-                        elif "gofile" in url_lower:
-                            site_key = "gofile"
-                            default_folder = "Gofile"
-                        elif "pixel" in url_lower:
-                            site_key = "pixeldrain"
-                            default_folder = "Pixeldrain"
-                        elif "tiktok" in url_lower:
-                            site_key = "tiktok"
-                            default_folder = "TikTok"
-                        elif any(x in url_lower for x in ("twitter", "x.com")):
-                            site_key = "twitter"
-                            default_folder = "Twitter"
-                        elif "instagram" in url_lower:
-                            site_key = "instagram"
-                            default_folder = "Instagram"
-                        elif "reddit" in url_lower:
-                            site_key = "reddit"
-                            default_folder = "Reddit"
-                        elif any(x in url_lower for x in ("simpcity.cr", "simpcity.su", "simpcity.")):
-                            site_key = "simpcity"
-                            default_folder = "SimpCityForums"
-                        elif "pornhub" in url_lower:
-                            site_key = "pornhub"
-                            default_folder = "Pornhub"
-                        elif "xvideos" in url_lower:
-                            site_key = "xvideos"
-                            default_folder = "XVideos"
-                        elif "rule34" in url_lower:
-                            site_key = "rule34"
-                            default_folder = "Rule34"
-                        elif any(x in url_lower for x in ("hanime", "hentai.tv")):
-                            site_key = "hanime"
-                            default_folder = "Hanime"
-                        elif "hitomi" in url_lower:
-                            site_key = "hitomi"
-                            default_folder = "Hitomi"
-                        elif any(x in url_lower for x in ("e-hentai", "exhentai")):
-                            site_key = "ehentai"
-                            default_folder = "E-Hentai"
-                        else:
-                            site_key = "other"
-                            default_folder = "Others"
+                        site_key = resolved_site.get("site_key") or "other"
+                        default_folder = resolved_site.get("folder") or "Others"
 
                     site_cfg = config.get("site_settings", {}).get(site_key, {})
                     folder_name = site_cfg.get("folder") or default_folder
@@ -739,7 +732,8 @@ class DownloadManager:
                     is_gallery_or_forum = (
                         any(x in url_lower for x in ("simpcity.cr", "simpcity.su", "simpcity."))
                         or info.get("is_playlist") is True
-                        or site_key in ("simpcity",)
+                        or bool(resolved_site.get("is_gallery"))
+                        or site_key in ("simpcity", "kemono", "coomer", "erome", "cyberdrop")
                     )
                     is_playlist_or_archive = (
                         (site_key == "youtube" and (
@@ -792,10 +786,19 @@ class DownloadManager:
                             task.item_count = 0  # 0 = hide the X/Y counter chip, show plain count elsewhere
                     if data.get("item_title"):
                         task.title = data["item_title"]
+                    if "status_detail" in data and data["status_detail"] is not None:
+                        task.status_detail = str(data["status_detail"])
 
                     status = data.get("status", "")
                     if status == "downloading":
-                        task.status = TaskStatus.DOWNLOADING
+                        with self._lock:
+                            if task._cancel_event.is_set():
+                                raise _CancelledError()
+                            if not task._pause_event.is_set():
+                                return
+                            task.status = TaskStatus.DOWNLOADING
+                            if "status_detail" not in data and task.status_detail in ("Sayfa bilgisi alınıyor...", "Sıra bekleniyor..."):
+                                task.status_detail = ""
                         total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
                         downloaded = data.get("downloaded_bytes", 0)
                         if total and int(total) > 0:
@@ -818,6 +821,12 @@ class DownloadManager:
                             task.filename = str(data["filename"])
                     elif status == "converting":
                         task.status = TaskStatus.CONVERTING
+                        if not data.get("status_detail"):
+                            task.status_detail = "Dönüştürülüyor..."
+                    elif status == "merging":
+                        task.status = TaskStatus.DOWNLOADING
+                        if not data.get("status_detail"):
+                            task.status_detail = "Video ve ses birleştiriliyor..."
                     elif status == "finished":
                         task.filename = data.get("filename", task.filename)
                         if data.get("file_size"):
@@ -825,7 +834,9 @@ class DownloadManager:
                         # For gallery/watcher downloads: update item counter and animate progress
                         if idx:
                             task.item_index = int(idx)
-                            task.status = TaskStatus.DOWNLOADING
+                            with self._lock:
+                                if task._pause_event.is_set() and not task._cancel_event.is_set():
+                                    task.status = TaskStatus.DOWNLOADING
                             # Update speed from watcher
                             watcher_speed = data.get("speed") or 0.0
                             if watcher_speed > 0:
@@ -845,14 +856,26 @@ class DownloadManager:
 
             try:
                 # 4a. Wait for download slot (Sequential Download support)
-                import time
-                task.status = TaskStatus.QUEUED
-                task._metadata_fetched = True
-                while True:
-                    if task._cancel_event.is_set():
-                        raise _CancelledError()
-                    
-                    with self._lock:
+                with self._lock:
+                    task._metadata_fetched = True
+                    if not task._pause_event.is_set():
+                        task.status = TaskStatus.PAUSED
+                        task.status_detail = ""
+                    elif not task._cancel_event.is_set():
+                        task.status = TaskStatus.QUEUED
+                        task.status_detail = "Sıra bekleniyor..."
+                    while True:
+                        if task._cancel_event.is_set():
+                            raise _CancelledError()
+                        if not task._pause_event.is_set():
+                            task.status = TaskStatus.PAUSED
+                            task.status_detail = ""
+                            self._slot_cond.wait(timeout=1.0)
+                            continue
+                        if task.status == TaskStatus.PAUSED:
+                            task.status = TaskStatus.QUEUED
+                            task.status_detail = "Sıra bekleniyor..."
+
                         if bool(config.get("sequential_download", False)):
                             concurrent_limit = 1
                         else:
@@ -862,32 +885,33 @@ class DownloadManager:
                             if concurrent_limit is None or int(concurrent_limit) <= 0:
                                 concurrent_limit = 3
                             concurrent_limit = int(concurrent_limit)
-                        
+
                         # Count ONLY tasks that are truly actively downloading/converting
                         active = sum(
-                            1 for t in self._tasks.values() 
-                            if getattr(t, "_is_actually_downloading", False) 
+                            1 for t in self._tasks.values()
+                            if getattr(t, "_is_actually_downloading", False)
                             and t.status in (TaskStatus.DOWNLOADING, TaskStatus.CONVERTING)
                         )
-                        
+
                         if active < concurrent_limit:
                             # Am I the next in line?
                             # Look at ALL tasks not yet actively downloading, in ordered position
                             waiting_ids = [
                                 tid for tid in self._ordered_ids
-                                if tid in self._tasks 
-                                and self._tasks[tid].status == TaskStatus.QUEUED 
+                                if tid in self._tasks
+                                and self._tasks[tid].status == TaskStatus.QUEUED
                                 and not getattr(self._tasks[tid], "_is_actually_downloading", False)
                             ]
                             # Also include tasks not in ordered_ids yet
                             if task.id not in self._ordered_ids:
                                 waiting_ids.insert(0, task.id)
-                            
+
                             if not waiting_ids or waiting_ids[0] == task.id:
                                 task._is_actually_downloading = True
                                 task.status = TaskStatus.DOWNLOADING
+                                task.status_detail = "Bağlantı hazırlanıyor..."
                                 break
-                    time.sleep(0.3)
+                        self._slot_cond.wait(timeout=1.0)
 
                 try:
                     setattr(_progress_hook, "_task", task)
@@ -897,6 +921,7 @@ class DownloadManager:
                         format_id=task.format_type,
                         progress_hook=_progress_hook,
                         cancel_event=task._cancel_event,
+                        pause_event=task._pause_event,
                         task_id=task.id,
                         start_time=task.start_time,
                         end_time=task.end_time,
@@ -944,6 +969,7 @@ class DownloadManager:
                                 format_id=task.format_type,
                                 progress_hook=_progress_hook,
                                 cancel_event=task._cancel_event,
+                                pause_event=task._pause_event,
                                 task_id=task.id,
                                 start_time=task.start_time,
                                 end_time=task.end_time,
@@ -962,13 +988,24 @@ class DownloadManager:
                     if not success:
                         raise dl_err
 
-                if task._cancel_event.is_set():
-                    task.status = TaskStatus.CANCELLED
-                    return
+                with self._lock:
+                    if task._cancel_event.is_set():
+                        task.status = TaskStatus.CANCELLED
+                        task._is_actually_downloading = False
+                        self._slot_cond.notify_all()
+                        return
+                    # Network download is complete; release the concurrency slot now so
+                    # queued downloads can start in parallel with local post-processing.
+                    task._is_actually_downloading = False
+                    self._slot_cond.notify_all()
 
                 if (task.start_time or task.end_time) and result_path and os.path.isfile(result_path):
-                    if not extractor.__class__.__name__.startswith("YtDlp") or task.keep_original:
-                        task.status = TaskStatus.CONVERTING
+                    if not extractor.__class__.__name__.startswith(("YtDlp", "Ytdlp")) or task.keep_original:
+                        with self._lock:
+                            task.status = TaskStatus.CONVERTING
+                            task.status_detail = "Video kırpılıyor..."
+                            task.speed = 0.0
+                            task.eta = 0
                         logger.info("Trimming file %s from %s to %s", result_path, task.start_time, task.end_time)
                         try:
                             def _p_time(val: str) -> float:
@@ -987,7 +1024,8 @@ class DownloadManager:
                             dur_sec = e_sec - s_sec if e_sec > s_sec else 0
 
                             temp_out = result_path + ".trimmed" + os.path.splitext(result_path)[1]
-                            cmd = [config.get_ffmpeg_path(), "-y"]
+                            ffmpeg_bin = config.get_ffmpeg_path() or "ffmpeg"
+                            cmd = [ffmpeg_bin, "-y"]
                             if s_sec > 0:
                                 cmd.extend(["-ss", str(s_sec)])
                             cmd.extend(["-i", result_path])
@@ -1041,10 +1079,11 @@ class DownloadManager:
                 if is_empty:
                     raise Exception("İndirme işlemi bitti ancak hedef klasörde hiçbir dosya oluşturulmadı. İçerik platform tarafından engellenmiş veya gizli olabilir.")
 
-                task.status = TaskStatus.COMPLETED
-                task._is_actually_downloading = False
-                task.progress = 100.0
-                task.filename = result_path or task.filename
+                with self._lock:
+                    task.progress = 100.0
+                    task.speed = 0.0
+                    task.eta = 0
+                    task.filename = result_path or task.filename
 
                 if task.compress_archive or config.get("auto_compress", False):
                     # Only archive if it's a single item, or if it's the last item in a playlist
@@ -1053,6 +1092,9 @@ class DownloadManager:
                         logger.info("Skipping archive for %s: item %d of %d", check_target, task.item_index, task.item_count)
                     else:
                         fmt = (task.compress_format or config.get("compress_format", "zip")).lower().strip(".")
+                        with self._lock:
+                            task.status = TaskStatus.CONVERTING
+                            task.status_detail = f"{fmt.upper()} arşivleniyor..."
                         try:
                             logger.info("Archiving %s using format %s...", check_target, fmt)
                             
@@ -1201,10 +1243,16 @@ class DownloadManager:
                             logger.error("Compression archive error: %s", arc_err)
 
                 # On playlist/archive completion: restore the original title and clear item counter
-                # On playlist/archive completion: restore the original title
-                if task.archive_title:
-                    task.title = task.archive_title
-                    task.item_index = 0   # Clear so UI shows just the archive title
+                with self._lock:
+                    if task.archive_title:
+                        task.title = task.archive_title
+                        task.item_index = 0   # Clear so UI shows just the archive title
+                    task.filename = result_path or task.filename
+                    task.progress = 100.0
+                    task.speed = 0.0
+                    task.eta = 0
+                    task.status_detail = ""
+                    task.status = TaskStatus.COMPLETED
                 logger.info("Task %s completed.", task.id)
                 try:
                     config.add_to_history(task.to_dict())
@@ -1236,7 +1284,11 @@ class DownloadManager:
                 task.error_message = format_user_error(fatal_exc)
                 logger.critical("Task %s fatal unhandled error: %s", task.id, fatal_exc, exc_info=True)
         finally:
-            task._is_actually_downloading = False
+            with self._lock:
+                task._is_actually_downloading = False
+                if task.status in (TaskStatus.CANCELLED, TaskStatus.ERROR):
+                    task.status_detail = ""
+                self._slot_cond.notify_all()
 
 
 class _CancelledError(BaseException):

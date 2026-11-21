@@ -19,6 +19,7 @@ Strategy
 6. Use ``curl_cffi`` when Cloudflare challenge pages are detected.
 """
 
+import concurrent.futures
 import logging
 import os
 import re
@@ -32,7 +33,16 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 
-from src.extractors.base_extractor import BaseExtractor, ExtractionError
+from src.config import config
+from src.extractors.base_extractor import BaseExtractor, ExtractionCancelled, ExtractionError
+from src.extractors.fast_downloader import (
+    SlidingSpeedTracker,
+    _sleep_cancelable,
+    _wait_if_paused,
+    min_split_bytes,
+    ranged_work_stealing_download,
+    should_start_direct_segmented,
+)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
@@ -44,6 +54,7 @@ _CONCURRENT_PER_DOMAIN = 2
 
 # Known Bunkr domain patterns (updated dynamically at runtime).
 _BUNKR_DOMAINS: set[str] = {
+    "bunkr.lv", "bunkr.la", "bunkr.ws", "bunkr.red",
     "bunkr.fi", "bunkr.si", "bunkr.la", "bunkr.su", "bunkr.is",
     "bunkr.ru", "bunkr.ph", "bunkr.ac", "bunkr.ws", "bunkr.cr",
     "bunkr.sk", "bunkr.black", "bunkr.red", "bunkr.site", "bunkr.cat",
@@ -90,7 +101,55 @@ class BunkrExtractor(BaseExtractor):
             "Upgrade-Insecure-Requests": "1",
         })
         self._cffi_session = None  # lazy curl_cffi session
+        self._tl = threading.local()
         self._scrape_cache: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+        self._cdn_pools: dict[tuple[str, bool], dict[int, Any]] = {}
+        self._cdn_pool_lock = threading.Lock()
+        self._host_use_cffi: dict[str, bool] = {}
+
+    @staticmethod
+    def _new_cffi_session(impersonate: str = "chrome") -> Any:
+        from curl_cffi import CurlOpt
+        from curl_cffi.requests import Session as CffiSession
+        return CffiSession(
+            impersonate=impersonate,
+            verify=False,
+            curl_options={CurlOpt.IPRESOLVE: 1},
+        )
+
+    def _get_req_session(self) -> requests.Session:
+        sess = getattr(self._tl, "req_sess", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.verify = False
+            sess.headers.update(self._session.headers)
+            self._tl.req_sess = sess
+        return sess
+
+    def _get_cffi_session(self, impersonate: str = "chrome120") -> Any:
+        sess = getattr(self._tl, "cffi_sess", None)
+        if sess is None:
+            sess = self._new_cffi_session(impersonate=impersonate)
+            self._tl.cffi_sess = sess
+        return sess
+
+    def _get_cdn_pool(self, cdn_host: str, use_cffi: bool) -> dict[int, Any]:
+        with self._cdn_pool_lock:
+            key = (cdn_host, use_cffi)
+            if key not in self._cdn_pools:
+                self._cdn_pools[key] = {}
+            return self._cdn_pools[key]
+
+    def _close_cdn_pools(self) -> None:
+        with self._cdn_pool_lock:
+            for pool in self._cdn_pools.values():
+                for s in pool.values():
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                pool.clear()
+            self._cdn_pools.clear()
 
     # ------------------------------------------------------------------
     # Capability
@@ -124,7 +183,7 @@ class BunkrExtractor(BaseExtractor):
                 break
         if not thumb:
             try:
-                html = self._fetch_page(url)
+                html = self._last_html if getattr(self, "_last_html_url", None) == url else self._fetch_page(url)
                 soup = BeautifulSoup(html, "html.parser")
                 for img in soup.select("img[src*='http'], img[src*='thumbs'], img[src*='cdn']"):
                     src = img.get("src", "")
@@ -164,6 +223,10 @@ class BunkrExtractor(BaseExtractor):
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
         **kwargs: Any,
     ) -> str:
+        cancel_event = kwargs.get("cancel_event")
+        pause_event = kwargs.get("pause_event")
+        _wait_if_paused(pause_event, cancel_event)
+
         page_type, items = self._scrape_page(url)
 
         if not items:
@@ -172,62 +235,126 @@ class BunkrExtractor(BaseExtractor):
         dest = Path(output_path)
         dest.mkdir(parents=True, exist_ok=True)
 
+        def _resolve_item(it: dict[str, Any]) -> tuple[str, str]:
+            r_url = it.get("url", "")
+            r_name = it.get("filename", "")
+            if it.get("_needs_resolve") and r_url:
+                _, sub_items = self._scrape_page(r_url)
+                if sub_items and sub_items[0].get("url"):
+                    r_url = sub_items[0]["url"]
+                    r_name = sub_items[0].get("filename", r_name)
+            if r_url and ("/file/" in r_url or "dl.bunkr" in r_url):
+                r_url = self._resolve_dl_page(r_url, url)
+            return r_url, r_name
+
         last_path = ""
-        for idx, item in enumerate(items, 1):
-            dl_url = item.get("url", "")
-            
-            if item.get("_needs_resolve"):
-                try:
-                    _, sub_items = self._scrape_page(dl_url)
-                    if sub_items and sub_items[0].get("url"):
-                        dl_url = sub_items[0]["url"]
-                        item["filename"] = sub_items[0].get("filename", item.get("filename"))
-                except Exception as exc:
-                    logger.warning("Failed to resolve album item %s: %s", dl_url, exc)
+        lookahead_exec = concurrent.futures.ThreadPoolExecutor(max_workers=2) if len(items) > 1 else None
+        future_map: dict[int, concurrent.futures.Future] = {}
+        try:
+            for idx, item in enumerate(items, 1):
+                _wait_if_paused(pause_event, cancel_event)
+
+                # En fazla 2 sonraki öğeyi arka planda önceden çöz & imzala
+                if lookahead_exec is not None and not (cancel_event is not None and cancel_event.is_set()):
+                    for ahead in range(idx + 1, min(len(items), idx + 2) + 1):
+                        if ahead not in future_map:
+                            future_map[ahead] = lookahead_exec.submit(_resolve_item, items[ahead - 1])
+
+                fut = future_map.pop(idx, None)
+                if fut is not None:
+                    try:
+                        dl_url, resolved_name = fut.result()
+                        if resolved_name:
+                            item["filename"] = resolved_name
+                    except Exception as exc:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ExtractionCancelled("İndirme iptal edildi.") from exc
+                        logger.warning("Failed to resolve album item %s: %s", item.get("url", ""), exc)
+                        dl_url = ""
+                else:
+                    if progress_hook and idx == 1:
+                        progress_hook({
+                            "status": "downloading",
+                            "status_detail": "Adres çözülüyor & imzalanıyor...",
+                            "filename": str(dest / self._safe_filename(item.get("filename", f"file_{idx}"))),
+                            "item_index": idx,
+                            "item_count": len(items),
+                            "item_title": item.get("filename", f"file_{idx}"),
+                        })
+                    try:
+                        dl_url, resolved_name = _resolve_item(item)
+                        if resolved_name:
+                            item["filename"] = resolved_name
+                    except Exception as exc:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ExtractionCancelled("İndirme iptal edildi.") from exc
+                        logger.warning("Failed to resolve album item %s: %s", item.get("url", ""), exc)
+                        dl_url = ""
+
+                # İlk dosya çözülürken sıradaki 2 öğeyi kuyruğa al
+                if lookahead_exec is not None and not (cancel_event is not None and cancel_event.is_set()):
+                    for ahead in range(idx + 1, min(len(items), idx + 2) + 1):
+                        if ahead not in future_map:
+                            future_map[ahead] = lookahead_exec.submit(_resolve_item, items[ahead - 1])
+
+                filename = self._safe_filename(item.get("filename", f"file_{idx}"))
+                if not dl_url:
                     continue
 
-            if "/file/" in dl_url or "dl.bunkr" in dl_url:
-                dl_url = self._resolve_dl_page(dl_url, url)
-            
-            filename = self._safe_filename(item.get("filename", f"file_{idx}"))
-            if not dl_url:
-                continue
+                file_dest = dest / filename
+                domain = urlparse(dl_url).hostname or ""
+                sem = _get_semaphore(domain)
 
-            file_dest = dest / filename
-            domain = urlparse(dl_url).hostname or ""
-            sem = _get_semaphore(domain)
+                sem.acquire()
+                try:
+                    _wait_if_paused(pause_event, cancel_event)
+                    def _wrapped_hook(data: dict[str, Any]) -> None:
+                        data["item_index"] = idx
+                        data["item_count"] = len(items)
+                        data["item_title"] = filename
+                        if progress_hook:
+                            progress_hook(data)
 
-            sem.acquire()
-            try:
-                def _wrapped_hook(data: dict[str, Any]) -> None:
-                    data["item_index"] = idx
-                    data["item_count"] = len(items)
-                    data["item_title"] = filename
-                    if progress_hook:
-                        progress_hook(data)
+                    if progress_hook and idx == 1:
+                        progress_hook({
+                            "status": "downloading",
+                            "status_detail": "Bağlanılıyor...",
+                            "filename": str(file_dest),
+                            "item_index": idx,
+                            "item_count": len(items),
+                            "item_title": filename,
+                            "downloaded_bytes": 0,
+                            "total_bytes": 0,
+                        })
 
-                if progress_hook:
-                    progress_hook({
-                        "status": "downloading",
-                        "filename": str(file_dest),
-                        "item_index": idx,
-                        "item_count": len(items),
-                        "item_title": filename,
-                        "downloaded_bytes": 0,
-                        "total_bytes": 0,
-                    })
-
-                self._download_file(dl_url, file_dest, url, _wrapped_hook)
-                last_path = str(file_dest)
-            except Exception as exc:
-                if len(items) == 1:
-                    raise  # Let DownloadManager handle and mark as error
-                logger.error(
-                    "Bunkr file %d/%d (%s) failed: %s",
-                    idx, len(items), filename, exc,
-                )
-            finally:
-                sem.release()
+                    self._download_file(
+                        dl_url, file_dest, url, _wrapped_hook,
+                        cancel_event=cancel_event, pause_event=pause_event,
+                    )
+                    last_path = str(file_dest)
+                except ExtractionCancelled:
+                    raise
+                except BaseException as exc:
+                    if (
+                        type(exc).__name__ == "_CancelledError"
+                        or (cancel_event is not None and cancel_event.is_set())
+                    ):
+                        raise ExtractionCancelled("İndirme iptal edildi.") from exc
+                    if len(items) == 1:
+                        raise  # Let DownloadManager handle and mark as error
+                    logger.error(
+                        "Bunkr file %d/%d (%s) failed: %s",
+                        idx, len(items), filename, exc,
+                    )
+                finally:
+                    sem.release()
+        finally:
+            for fut in future_map.values():
+                fut.cancel()
+            future_map.clear()
+            if lookahead_exec is not None:
+                lookahead_exec.shutdown(wait=False, cancel_futures=True)
+            self._close_cdn_pools()
 
         if progress_hook:
             progress_hook({"status": "finished", "filename": last_path or str(dest)})
@@ -243,6 +370,8 @@ class BunkrExtractor(BaseExtractor):
         if hasattr(self, "_scrape_cache") and url in self._scrape_cache:
             return self._scrape_cache[url]
         html = self._fetch_page(url)
+        self._last_html_url = url
+        self._last_html = html
         soup = BeautifulSoup(html, "html.parser")
 
         # Detect page type
@@ -437,21 +566,27 @@ class BunkrExtractor(BaseExtractor):
         headers = {
             "Referer": origin + "/",
         }
-        
-        try:
-            resp = self._session.get(sign_url, headers=headers, timeout=15)
-        except Exception:
-            resp = None
-            
-        if not resp or resp.status_code != 200:
+
+        req_sess = self._get_req_session()
+        resp = None
+        for _try in range(2):
             try:
-                if getattr(self, "_cffi_session", None) is None:
-                    from curl_cffi.requests import Session as CffiSession
-                    self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
-                resp = self._cffi_session.get(sign_url, headers=headers, timeout=15)
+                resp = req_sess.get(sign_url, headers=headers, timeout=(8, 12))
+                if resp.status_code == 200:
+                    break
+            except Exception:
+                resp = None
+
+            try:
+                cffi_sess = self._get_cffi_session("chrome120")
+                resp = cffi_sess.get(sign_url, headers=headers, timeout=(8, 12))
+                if resp.status_code == 200:
+                    break
             except Exception as exc:
-                logger.warning("Failed to sign url (cffi fallback): %s", exc)
-                return cdn_url
+                if _try == 1:
+                    logger.warning("Failed to sign url (cffi fallback): %s", exc)
+                    return cdn_url
+            time.sleep(0.4)
 
         try:
             if resp and resp.status_code == 200:
@@ -481,17 +616,16 @@ class BunkrExtractor(BaseExtractor):
         }
         json_data = {"id": file_id}
         
+        req_sess = self._get_req_session()
         try:
-            resp = self._session.post(api_url, json=json_data, headers=headers, timeout=15)
+            resp = req_sess.post(api_url, json=json_data, headers=headers, timeout=(8, 12))
         except Exception:
             resp = None
 
         if not resp or resp.status_code != 200:
             try:
-                if getattr(self, "_cffi_session", None) is None:
-                    from curl_cffi.requests import Session as CffiSession
-                    self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
-                resp = self._cffi_session.post(api_url, json=json_data, headers=headers, timeout=15)
+                cffi_sess = self._get_cffi_session("chrome120")
+                resp = cffi_sess.post(api_url, json=json_data, headers=headers, timeout=(8, 12))
             except Exception as exc:
                 logger.warning("Failed to resolve Bunkr dl page (cffi fallback) %s: %s", dl_url, exc)
                 return dl_url
@@ -503,19 +637,18 @@ class BunkrExtractor(BaseExtractor):
                 path = meta.get("path", "")
                 if mediafiles and path:
                     raw_url = mediafiles + path
-                    parsed_path = quote(urlparse(raw_url).path)
+                    parsed_path = quote(urlparse(raw_url).path, safe='')
                     sign_url = f"https://glb-apisign.cdn.cr/sign?path={parsed_path}"
                     
                     try:
-                        sign_resp = self._session.get(sign_url, headers={"Referer": origin + "/"}, timeout=15)
+                        sign_resp = req_sess.get(sign_url, headers={"Referer": origin + "/"}, timeout=(8, 12))
                     except Exception:
                         sign_resp = None
                         
                     if not sign_resp or sign_resp.status_code != 200:
-                        if getattr(self, "_cffi_session", None) is None:
-                            from curl_cffi.requests import Session as CffiSession
-                            self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
-                        sign_resp = self._cffi_session.get(sign_url, headers={"Referer": origin + "/"}, timeout=15)
+                        sign_resp = self._get_cffi_session("chrome120").get(
+                            sign_url, headers={"Referer": origin + "/"}, timeout=(8, 12)
+                        )
                         
                     if sign_resp and sign_resp.status_code == 200:
                         sdata = sign_resp.json()
@@ -536,12 +669,17 @@ class BunkrExtractor(BaseExtractor):
         parsed = urlparse(url)
         original_host = parsed.hostname or ""
 
-        # Ordered list of fallback domains to try
-        _FALLBACK_DOMAINS = [
+        # Ordered list of fallback domains to try (live hotfix manifest first, then static defaults)
+        _DEFAULT_FALLBACK_DOMAINS = [
+            "bunkr.lv", "bunkr.la", "bunkr.ws", "bunkr.red",
             "bunkr.cr", "bunkr.si", "bunkr.fi", "bunkr.ph",
-            "bunkr.ac", "bunkr.ws", "bunkr.sk", "bunkr.black",
-            "bunkr.red", "bunkr.site",
+            "bunkr.ac", "bunkr.sk", "bunkr.black", "bunkr.site",
         ]
+        try:
+            from src.engine.site_registry import site_registry
+            _FALLBACK_DOMAINS = site_registry.get_domains_for("bunkr", _DEFAULT_FALLBACK_DOMAINS)
+        except Exception:
+            _FALLBACK_DOMAINS = _DEFAULT_FALLBACK_DOMAINS
 
         # Build candidate URLs: original domain first, then alternatives
         candidates: list[str] = [url]
@@ -552,10 +690,11 @@ class BunkrExtractor(BaseExtractor):
 
         last_exc: Exception = Exception("No candidates tried")
 
+        req_sess = self._get_req_session()
         for candidate_url in candidates:
             for attempt in range(1, 3):  # 2 attempts per domain
                 try:
-                    resp = self._session.get(candidate_url, timeout=15)
+                    resp = req_sess.get(candidate_url, timeout=15)
 
                     # Detect Cloudflare challenge
                     if resp.status_code == 403 or (
@@ -626,11 +765,8 @@ class BunkrExtractor(BaseExtractor):
                 "Run: pip install curl_cffi"
             )
 
-        if self._cffi_session is None:
-            from curl_cffi.requests import Session as CffiSession
-            self._cffi_session = CffiSession(impersonate="chrome120", verify=False)
-
-        resp = self._cffi_session.get(url, timeout=30, verify=False)
+        cffi_sess = self._get_cffi_session("chrome120")
+        resp = cffi_sess.get(url, timeout=30, verify=False)
         if resp.status_code != 200:
             raise ExtractionError(
                 f"curl_cffi request failed (HTTP {resp.status_code}): {url}"
@@ -643,15 +779,10 @@ class BunkrExtractor(BaseExtractor):
         dest: Path,
         referer: str,
         progress_hook: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
     ) -> None:
-        """Download a single file with exponential back-off.
-
-        Strategy:
-        - Try standard `requests` first: benefits from system-level DPI bypass tools (e.g. ByeDPI).
-        - If 403/429, switch to curl_cffi (Chrome TLS impersonation) as fallback.
-        """
-        # Build download-specific headers that override the session's page-navigation headers.
-        # The session has Sec-Fetch-Site:none / Sec-Fetch-Mode:navigate which are WRONG for
+        """Download a single file with exponential back-off."""
         ext = Path(urlparse(url).path).suffix.lower()
         is_video = ext in (".mp4", ".mkv", ".webm")
         headers = {
@@ -663,126 +794,318 @@ class BunkrExtractor(BaseExtractor):
             "Sec-Fetch-Site": "cross-site",
         }
 
-        use_cffi = False
+        cdn_host = urlparse(url).hostname or ""
+        use_cffi = self._host_use_cffi.get(cdn_host, False)
+        seg_enabled, seg_conns, seg_mode = config.get_segmented_settings()
+        # Bunkr CDN sunucuları aynı IP'den >2 paralel sokette HTTP 503 döndürüyor (2x en hızlı güvenli sınır)
+        bunkr_workers = min(seg_conns, 2) if (seg_enabled and seg_conns >= 2) else 1
 
+        def _make_bunkr_cffi(_gen: int = 0) -> Any:
+            return self._new_cffi_session("chrome")
+
+        def _make_bunkr_req(_gen: int = 0) -> Any:
+            s = requests.Session()
+            s.verify = False
+            s.headers.update(self._session.headers)
+            return s
+
+        need_resign = False
         for attempt in range(1, _MAX_RETRIES + 1):
+            _wait_if_paused(pause_event, cancel_event)
+            resp = None
+            tmp_path = dest.with_suffix(dest.suffix + ".downloading")
+            cdn_pool = self._get_cdn_pool(cdn_host, use_cffi)
+            probe_sess = None
+            probe_kept = False
             try:
-                if use_cffi:
-                    if self._cffi_session is None:
-                        from curl_cffi.requests import Session as CffiSession
-                        self._cffi_session = CffiSession(impersonate="chrome", verify=False)
-                    
-                    # Re-sign the URL with curl_cffi to match its JA3 fingerprint!
-                    if "token=" in url:
-                        try:
-                            parsed_cdn = urlparse(url)
-                            qs = parse_qs(parsed_cdn.query)
-                            if "token" in qs:
-                                path_encoded = quote(parsed_cdn.path, safe='')
-                                r_sign = self._cffi_session.get(
-                                    f"https://glb-apisign.cdn.cr/sign?path={path_encoded}",
-                                    headers={"Referer": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}/"},
-                                    timeout=15
-                                )
-                                if r_sign.status_code == 200:
-                                    new_sign_data = r_sign.json()
-                                    qs["token"] = [new_sign_data["token"]]
-                                    qs["ex"] = [str(new_sign_data["ex"])]
-                                    qs.pop("n", None)
-                                    new_query = urlencode(qs, doseq=True)
-                                    url = urlunparse(parsed_cdn._replace(query=new_query))
-                        except Exception as sign_e:
-                            logger.warning("Failed to re-sign with curl_cffi: %s", sign_e)
+                if use_cffi or need_resign:
+                    need_resign = False
+                    # Re-sign URL whenever missing token or retried via curl_cffi
+                    try:
+                        parsed_cdn = urlparse(url)
+                        qs = parse_qs(parsed_cdn.query)
+                        if "token" in qs or parsed_cdn.path.startswith("/storage/"):
+                            path_encoded = quote(parsed_cdn.path, safe='')
+                            sign_headers = {"Referer": f"{urlparse(referer).scheme}://{urlparse(referer).hostname}/"}
+                            cffi_s = self._get_cffi_session("chrome")
+                            r_sign = cffi_s.get(
+                                f"https://glb-apisign.cdn.cr/sign?path={path_encoded}",
+                                headers=sign_headers,
+                                timeout=(8, 12),
+                            )
+                            if r_sign.status_code == 200:
+                                new_sign_data = r_sign.json()
+                                qs["token"] = [new_sign_data["token"]]
+                                qs["ex"] = [str(new_sign_data["ex"])]
+                                qs.pop("n", None)
+                                new_query = urlencode(qs, doseq=True)
+                                url = urlunparse(parsed_cdn._replace(query=new_query))
+                    except Exception as sign_e:
+                        logger.warning("Failed to re-sign with curl_cffi: %s", sign_e)
 
-                    # For curl_cffi: pass only non-None headers
-                    cffi_headers = {k: v for k, v in headers.items() if v is not None}
-                    resp = self._cffi_session.get(
-                        url, stream=True, timeout=120, headers=cffi_headers, verify=False,
-                    )
-                else:
-                    resp = self._session.get(url, stream=True, timeout=120, headers=headers)
+                probe_sess = cdn_pool.pop(0, None) or (_make_bunkr_cffi() if use_cffi else _make_bunkr_req())
+                req_headers = dict(headers)
+                probed_range = bunkr_workers >= 2
+                if probed_range:
+                    req_headers["Range"] = "bytes=0-0"
+
+                resp = probe_sess.get(
+                    url, stream=True, timeout=(12, 25), headers=req_headers, verify=False,
+                )
 
                 if resp.status_code in (403, 429):
-                    # Bunkr's CDN returns a JSON {"error":"forbidden"} if the file is deleted or path is invalid.
-                    # Cloudflare bot protection returns HTML. So if it's JSON, don't retry!
+                    status_code = resp.status_code
                     content_type = resp.headers.get("Content-Type", "").lower()
-                    
                     is_json_error = "application/json" in content_type
                     if not is_json_error:
                         try:
-                            # Peek the first bytes to see if it's a JSON string
                             peek = next(resp.iter_content(chunk_size=128), b"").decode("utf-8", "ignore").strip()
                             if peek.startswith("{") and "forbidden" in peek.lower():
                                 is_json_error = True
                         except Exception:
                             pass
 
+                    if hasattr(resp, "close"):
+                        try:
+                            resp.close()
+                        except Exception:
+                            pass
+                    resp = None
+
                     if is_json_error:
                         logger.warning("Bunkr file is deleted or forbidden by server (JSON response). Skipping.")
                         raise Exception("Bunkr sunucusunda bu dosya bulunamadı veya silinmiş (403 Forbidden).")
 
+                    try:
+                        probe_sess.close()
+                    except Exception:
+                        pass
+                    probe_sess = None
+
                     if not use_cffi:
+                        if "token=" not in url and urlparse(url).path.startswith("/storage/"):
+                            need_resign = True
                         logger.info(
                             "Bunkr CDN returned %d with requests – switching to curl_cffi (attempt %d/%d).",
-                            resp.status_code, attempt, _MAX_RETRIES,
+                            status_code, attempt, _MAX_RETRIES,
                         )
                         use_cffi = True
                         continue
+                    need_resign = True
                     wait = _RETRY_BACKOFF * (2 ** (attempt - 1))
                     logger.warning(
                         "Bunkr download %d (attempt %d/%d) – retrying in %ds.",
-                        resp.status_code, attempt, _MAX_RETRIES, wait,
+                        status_code, attempt, _MAX_RETRIES, wait,
                     )
-                    time.sleep(wait)
+                    if _sleep_cancelable(wait, cancel_event):
+                        raise ExtractionCancelled("İndirme iptal edildi.")
                     continue
 
                 if resp.status_code not in (200, 206):
                     resp.raise_for_status()
 
-                # Stream to disk
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = dest.with_suffix(dest.suffix + ".downloading")
-                total_size = int(resp.headers.get("Content-Length", 0))
+                total_size = 0
+                resumable = False
+                if resp.status_code == 206:
+                    resumable = True
+                    cr = resp.headers.get("Content-Range", "")
+                    if "/" in cr and cr.rsplit("/", 1)[1].isdigit():
+                        total_size = int(cr.rsplit("/", 1)[1])
+                    if probed_range:
+                        # 1 baytlık probe gövdesini tüket ki urllib3 keep-alive soketini canlı tutsun
+                        try:
+                            _ = resp.content
+                        except Exception:
+                            pass
+                    if hasattr(resp, "close"):
+                        try:
+                            resp.close()
+                        except Exception:
+                            pass
+                    resp = None
+
+                    # Sıcak probe oturumunu Worker 0'a geri ver (sıfırdan el sıkışmayı önler)
+                    cdn_pool[0] = probe_sess
+                    probe_kept = True
+
+                    direct_bunkr = (
+                        should_start_direct_segmented(total_size, seg_mode)
+                        or (seg_mode == "adaptive" and total_size >= 2 * 1024 * 1024)
+                    )
+                    if bunkr_workers >= 2 and total_size > 0 and direct_bunkr:
+                        logger.info(
+                            "Bunkr parçalı indirme başlatılıyor (%d bağlantı, %s): %s (%.2f MB)",
+                            bunkr_workers, seg_mode, dest.name, total_size / 1048576,
+                        )
+                        ranged_work_stealing_download(
+                            url=url,
+                            dest=tmp_path,
+                            total_size=total_size,
+                            num_workers=bunkr_workers,
+                            make_session=_make_bunkr_cffi if use_cffi else _make_bunkr_req,
+                            headers=headers,
+                            start=0,
+                            allow_redirects=True,
+                            progress_hook=progress_hook,
+                            cancel_event=cancel_event,
+                            pause_event=pause_event,
+                            mode=seg_mode,
+                            session_pool=cdn_pool,
+                            keep_sessions=True,
+                        )
+                        self._host_use_cffi[cdn_host] = use_cffi
+                        tmp_path.replace(dest)
+                        if progress_hook:
+                            progress_hook({
+                                "status": "finished",
+                                "filename": str(dest),
+                                "downloaded_bytes": total_size,
+                                "total_bytes": total_size,
+                            })
+                        return
+
+                    # Small file (< threshold) with Range verified: fetch whole file using warm session
+                    probe_sess = cdn_pool.pop(0, None) or (_make_bunkr_cffi() if use_cffi else _make_bunkr_req())
+                    probe_kept = False
+                    resp = probe_sess.get(
+                        url, stream=True, timeout=(12, 25), headers=headers, verify=False,
+                    )
+                    if resp.status_code not in (200, 206):
+                        resp.raise_for_status()
+                else:
+                    total_size = int(resp.headers.get("Content-Length", 0))
+                    if resp.headers.get("Accept-Ranges", "").lower() == "bytes":
+                        resumable = True
+
                 downloaded = 0
+                tracker = SlidingSpeedTracker(window=3.0)
+                last_emit = 0.0
+                start_ts = time.monotonic()
+                switch_at = -1
 
                 with open(tmp_path, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=65536):
+                    for chunk in resp.iter_content(chunk_size=262144):
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ExtractionCancelled("İndirme iptal edildi.")
+                        _wait_if_paused(pause_event, cancel_event)
                         if not chunk:
                             break
                         f.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_hook:
+                        clen = len(chunk)
+                        downloaded += clen
+                        now = time.monotonic()
+                        tracker.add(clen, now)
+
+                        el = now - start_ts
+                        if (
+                            resumable
+                            and bunkr_workers >= 2
+                            and total_size > 0
+                            and el >= 3.5
+                            and (total_size - downloaded) >= min_split_bytes(seg_mode)
+                            and (downloaded / el) < 350 * 1024
+                        ):
+                            switch_at = downloaded
+                            break
+
+                        if progress_hook and (now - last_emit >= 0.15):
+                            last_emit = now
+                            sp = tracker.rate(now)
                             progress_hook({
                                 "status": "downloading",
+                                "status_detail": "Tek bağlantı iniyor",
                                 "filename": str(dest),
                                 "downloaded_bytes": downloaded,
                                 "total_bytes": total_size,
+                                "speed": sp,
+                                "eta": int((total_size - downloaded) / sp) if sp > 0 and total_size > 0 else 0,
                             })
 
+                if hasattr(resp, "close"):
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                resp = None
+
+                if probe_sess is not None:
+                    cdn_pool[0] = probe_sess
+                    probe_kept = True
+
+                if switch_at >= 0:
+                    logger.info(
+                        "Bunkr yavaş soket (%s), kalan kısım %d parçalıya geçiriliyor.",
+                        dest.name, bunkr_workers,
+                    )
+                    ranged_work_stealing_download(
+                        url=url,
+                        dest=tmp_path,
+                        total_size=total_size,
+                        num_workers=bunkr_workers,
+                        make_session=_make_bunkr_cffi if use_cffi else _make_bunkr_req,
+                        headers=headers,
+                        start=switch_at,
+                        allow_redirects=True,
+                        progress_hook=progress_hook,
+                        cancel_event=cancel_event,
+                        pause_event=pause_event,
+                        mode=seg_mode,
+                        session_pool=cdn_pool,
+                        keep_sessions=True,
+                    )
+                    downloaded = total_size
+
                 tmp_path.replace(dest)
+                self._host_use_cffi[cdn_host] = use_cffi
                 if progress_hook:
-                    progress_hook({"status": "finished", "filename": str(dest)})
+                    progress_hook({
+                        "status": "finished",
+                        "filename": str(dest),
+                        "downloaded_bytes": downloaded,
+                        "total_bytes": total_size or downloaded,
+                    })
                 return  # success
 
-            except Exception as exc:
+            except BaseException as exc:
+                if not probe_kept and probe_sess is not None:
+                    try:
+                        probe_sess.close()
+                    except Exception:
+                        pass
+                    probe_sess = None
+                if resp is not None and hasattr(resp, "close"):
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                if (
+                    isinstance(exc, ExtractionCancelled)
+                    or type(exc).__name__ == "_CancelledError"
+                    or (cancel_event is not None and cancel_event.is_set())
+                ):
+                    tmp_path.unlink(missing_ok=True)
+                    if isinstance(exc, ExtractionCancelled):
+                        raise
+                    raise ExtractionCancelled("İndirme iptal edildi.") from exc
+
                 exc_str = str(exc).lower()
-                
-                # If we explicitly raised the forbidden error, abort immediately without retries
+
                 if "403 forbidden" in exc_str and "silinmiş" in exc_str:
                     raise
-                    
+
                 is_reset = any(k in exc_str for k in (
                     "connection aborted", "bağlantı karşıdan kesildi",
                     "connection reset", "(35) recv failure",
                 ))
                 if is_reset and use_cffi:
-                    # curl_cffi itself is blocked – likely conflicts with system DPI bypass tool
                     logger.warning(
                         "curl_cffi connection reset (possible ByeDPI conflict) on attempt %d/%d – switching back to requests.",
                         attempt, _MAX_RETRIES,
                     )
                     use_cffi = False
-                    time.sleep(2)
+                    if _sleep_cancelable(2, cancel_event):
+                        raise ExtractionCancelled("İndirme iptal edildi.")
                     continue
 
                 if not use_cffi:
@@ -797,7 +1120,8 @@ class BunkrExtractor(BaseExtractor):
                     "Bunkr download retry %d/%d (waiting %ds): %s",
                     attempt, _MAX_RETRIES, wait, exc,
                 )
-                time.sleep(wait)
+                if _sleep_cancelable(wait, cancel_event):
+                    raise ExtractionCancelled("İndirme iptal edildi.")
 
     # ------------------------------------------------------------------
     # Helpers

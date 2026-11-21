@@ -16,6 +16,26 @@
     settings: null,
   };
 
+  // ─── SAFE STORAGE HELPERS ───
+  const _memStorage = new Map();
+  function safeStorageGet(key, fallback = null) {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        const val = localStorage.getItem(key);
+        return val !== null ? val : fallback;
+      }
+    } catch (_) {}
+    return _memStorage.has(key) ? _memStorage.get(key) : fallback;
+  }
+  function safeStorageSet(key, val) {
+    _memStorage.set(key, String(val));
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        localStorage.setItem(key, String(val));
+      }
+    } catch (_) {}
+  }
+
   // ─── DOM CACHE ───
   const $ = (sel, ctx = document) => ctx.querySelector(sel);
   const $$ = (sel, ctx = document) => ctx.querySelectorAll(sel);
@@ -79,6 +99,9 @@
 
   // ─── BRIDGE HELPERS ───
   function getApi() {
+    if (window.SuyliosBridge && typeof window.SuyliosBridge.getApi === 'function') {
+      return window.SuyliosBridge.getApi();
+    }
     return window.pywebview && window.pywebview.api;
   }
 
@@ -212,20 +235,21 @@
     if (window._suyliosInitialized) return;
     window._suyliosInitialized = true;
     cacheDom();
-    try {
-      const savedLang = localStorage.getItem('suylios_language');
-      if (savedLang) applyLanguage(savedLang);
-    } catch(e) {}
-    bindTitlebar();
-    bindNavigation();
-    bindUrlInput();
-    bindSettingsSidebar();
-    bindSettingsControls();
-    bindKeyboard();
-    bindThemes();
-    bindSiteSettings();
-    bindAddSiteModal();
-    setupCustomSelects();
+    const savedLang = safeStorageGet('suylios_language');
+    if (savedLang) state._initialLangPromise = applyLanguage(savedLang);
+    const safeBind = (fn) => {
+      try { fn(); } catch (err) { console.error('[Suylios] init bind error:', err); }
+    };
+    safeBind(bindTitlebar);
+    safeBind(bindNavigation);
+    safeBind(bindUrlInput);
+    safeBind(bindSettingsSidebar);
+    safeBind(bindSettingsControls);
+    safeBind(bindKeyboard);
+    safeBind(bindThemes);
+    safeBind(bindSiteSettings);
+    safeBind(bindAddSiteModal);
+    safeBind(setupCustomSelects);
     waitForApi();
   }
 
@@ -256,36 +280,50 @@
     state.apiReady = true;
     dom.loadingOverlay?.classList.add('hidden');
 
-    // Load app info dynamically
-    try {
-      const appInfo = await callApi('get_app_info');
-      if (appInfo && appInfo.version) {
-        state.appVersion = appInfo.version;
-        const verEl = $('#about-version-text');
-        const curLang = localStorage.getItem('suylios_language') || 'tr';
-        if (verEl) verEl.textContent = (curLang === 'en' ? 'Version ' : 'Sürüm ') + state.appVersion;
-      }
-    } catch(e) {}
+    // Load app info and settings in parallel
+    const [appInfo, settings] = await Promise.all([
+      callApi('get_app_info'),
+      callApi('get_settings'),
+      state._initialLangPromise || Promise.resolve(),
+    ]);
+    state._initialLangPromise = null;
 
-    // Load settings
-    const settings = await callApi('get_settings');
+    if (appInfo && appInfo.version) {
+      state.appVersion = appInfo.version;
+      const verEl = $('#about-version-text');
+      const curLang = (settings && settings.language) || safeStorageGet('suylios_language', 'tr');
+      if (verEl) verEl.textContent = (curLang === 'en' ? 'Version ' : 'Sürüm ') + state.appVersion;
+    }
+
     if (settings) {
       state.settings = settings;
-      if (settings.theme) {
-        // selectTheme sets localStorage, dataset.theme, styles and UI active class
-        if (typeof selectTheme === 'function') {
-          selectTheme(settings.theme, true);
-        } else {
-          document.body.dataset.theme = settings.theme;
-          localStorage.setItem('suylios_theme', settings.theme);
-        }
+      const activeTheme = settings.theme || 'basit-beyaz';
+      if (typeof selectTheme === 'function') {
+        selectTheme(activeTheme, true);
+      } else {
+        document.documentElement.setAttribute('data-theme', activeTheme);
+        document.body.dataset.theme = activeTheme;
+        safeStorageSet('suylios_theme', activeTheme);
       }
       applySettingsToUI(settings);
+    } else if (typeof selectTheme === 'function') {
+      selectTheme(safeStorageGet('suylios_theme', 'basit-beyaz'), true);
     }
 
     // Start polling downloads
     startDownloadPolling();
     startClipboardMonitor();
+    // Pre-warm history & theme preview bitmaps once idle so first tab switches never stall
+    setTimeout(() => {
+      try {
+        renderHistory();
+        ['suylios', 'beyaz', 'koyu', 'matrix', 'blood', 'sunset'].forEach(name => {
+          const img = new Image();
+          img.decoding = 'async';
+          img.src = `assets/themes/${name}.png`;
+        });
+      } catch (e) {}
+    }, 1200);
   // Pano izleme toggle'i değiştiğinde Anında İndir satırını göster/gizle
   const clipMonitorEl = $('#setting-clipboard-monitor');
   if (clipMonitorEl) {
@@ -294,15 +332,144 @@
       if (subRow) subRow.style.display = this.checked ? '' : 'none';
       if (!this.checked) {
         const autoEl = $('#setting-clipboard-auto-download');
-        if (autoEl) autoEl.checked = false;
+        if (autoEl && autoEl.checked) {
+          autoEl.checked = false;
+          saveCurrentSettings();
+        }
       }
     });
     // İlk yükleme görünürlük
     const subRow = $('#clipboard-auto-download-row');
     if (subRow) subRow.style.display = clipMonitorEl.checked ? '' : 'none';
   }
-    setTimeout(() => checkForUpdates(false), 3000);
-    $('#btn-manual-check-update')?.addEventListener('click', () => checkForUpdates(true));
+    refreshUpdateCenter(false);
+    setTimeout(() => {
+      checkForUpdates(false);
+    }, 2800);
+    $('#btn-manual-check-update')?.addEventListener('click', async () => {
+      await refreshUpdateCenter(true);
+      await checkForUpdates(true);
+    });
+    $('#btn-sync-hotfixes')?.addEventListener('click', async () => {
+      const btn = $('#btn-sync-hotfixes');
+      const lang = window.CURRENT_LANG || safeStorageGet('suylios_language', 'tr');
+      if (btn) btn.disabled = true;
+      const res = await callApi('sync_hotfix_updates');
+      if (btn) btn.disabled = false;
+      if (res && res.ok) {
+        showToast(lang === 'en' ? 'Site rules refreshed' : 'Site kuralları güncellendi', 'success');
+      } else {
+        showToast((res && res.error) || (lang === 'en' ? 'Rule refresh failed' : 'Site kuralları yenilenemedi'), 'warning');
+      }
+      await refreshUpdateCenter(false);
+    });
+    $('#btn-update-engines')?.addEventListener('click', async () => {
+      const btn = $('#btn-update-engines');
+      const lang = window.CURRENT_LANG || safeStorageGet('suylios_language', 'tr');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = lang === 'en' ? 'Updating...' : 'Güncelleniyor...';
+      }
+      const res = await callApi('update_pypi_engines');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = lang === 'en' ? 'Update Tools' : 'Araçları Güncelle';
+      }
+      if (res && res.ok) {
+        const cnt = (res.updated || []).length;
+        showToast(
+          cnt > 0
+            ? (lang === 'en' ? `${cnt} download tool(s) updated!` : `${cnt} indirme aracı güncellendi!`)
+            : (lang === 'en' ? 'All tools are up to date!' : 'Tüm araçlar zaten güncel!'),
+          'success'
+        );
+      } else {
+        showToast((res && res.errors && res.errors[0]) || (res && res.error) || (lang === 'en' ? 'Tool update failed' : 'Araç güncellemesi başarısız'), 'warning');
+      }
+      await refreshUpdateCenter(false);
+    });
+    $('#btn-rollback-engines')?.addEventListener('click', async () => {
+      const lang = window.CURRENT_LANG || safeStorageGet('suylios_language', 'tr');
+      const ok = await customConfirm(
+        lang === 'en' ? 'Download tools will revert to the previous working version. Continue?' : 'İndirme araçları bir önceki çalışan sürüme döndürülecek. Onaylıyor musunuz?',
+        lang === 'en' ? 'Revert Tools' : 'Araçları Geri Al',
+        lang === 'en' ? 'Revert' : 'Geri Al',
+        true
+      );
+      if (!ok) return;
+      const res = await callApi('rollback_pypi_engines');
+      if (res && res.ok) {
+        showToast(lang === 'en' ? 'Tools reverted to previous version.' : 'İndirme araçları önceki sürüme döndürüldü.', 'success');
+      } else {
+        showToast((res && res.error) || (lang === 'en' ? 'Revert failed' : 'Geri alma başarısız'), 'warning');
+      }
+      await refreshUpdateCenter(false);
+    });
+  }
+
+  async function refreshUpdateCenter(checkRemote = false) {
+    const status = await callApi('get_update_center_status');
+    const rustEl = $('#uc-rust-status');
+    const rustBadge = $('#uc-rust-badge');
+    const hfEl = $('#uc-hotfix-status');
+    const engEl = $('#uc-engines-summary');
+    const rbBtn = $('#btn-rollback-engines');
+    const lang = window.CURRENT_LANG || safeStorageGet('suylios_language', 'tr');
+
+    if (status && status.ok) {
+      if (rustEl) {
+        rustEl.textContent = status.rust_engine_active
+          ? (lang === 'en' ? 'High-speed download engine active (v2.0.0)' : 'Hızlı indirme motoru aktif (v2.0.0)')
+          : (lang === 'en' ? 'Standard download engine active' : 'Standart indirme motoru aktif');
+      }
+      if (rustBadge) {
+        rustBadge.textContent = status.rust_engine_active
+          ? (lang === 'en' ? 'Fast Mode' : 'Hızlı Mod')
+          : (lang === 'en' ? 'Standard' : 'Standart');
+      }
+      if (hfEl) {
+        const seq = status.manifest_seq || 0;
+        const cnt = status.supported_sites_count || 1775;
+        hfEl.textContent = lang === 'en'
+          ? `List #${seq} • ${cnt}+ supported platforms`
+          : `Liste #${seq} • ${cnt}+ platform desteği güncel`;
+      }
+      if (engEl && status.installed_engines) {
+        const count = Object.keys(status.installed_engines).length;
+        engEl.textContent = lang === 'en'
+          ? `Video, gallery and archive tools ready (${count} components)`
+          : `Video, galeri ve arşiv indirme bileşenleri güncel (${count} modül)`;
+      }
+      if (rbBtn) {
+        rbBtn.classList.toggle('hidden', !status.has_rollback);
+      }
+    } else {
+      if (rustEl) rustEl.textContent = lang === 'en' ? 'Standard download engine active' : 'Standart indirme motoru aktif';
+      if (hfEl) hfEl.textContent = lang === 'en' ? 'Supported platform list loaded' : 'Desteklenen platform listesi yüklendi';
+    }
+
+    if (checkRemote) {
+      const full = await callApi('check_all_updates');
+      if (full && full.ok && full.channel3_engines && engEl) {
+        let updatable = 0;
+        for (const info of Object.values(full.channel3_engines)) {
+          if (info && info.has_update) updatable++;
+        }
+        engEl.textContent = updatable > 0
+          ? (lang === 'en'
+            ? `New updates available for ${updatable} download tool(s)`
+            : `${updatable} indirme aracı için yeni güncelleme hazır`)
+          : (lang === 'en'
+            ? 'All video, gallery and archive download tools are up to date'
+            : 'Tüm video, galeri ve arşiv indirme araçları güncel');
+        if (updatable > 0) {
+          showToast(
+            lang === 'en' ? `${updatable} download tool update(s) available!` : `${updatable} indirme aracı için yeni güncelleme mevcut!`,
+            'info'
+          );
+        }
+      }
+    }
   }
 
   async function checkForUpdates(manual = false) {
@@ -311,7 +478,7 @@
     const manualBtn = $('#btn-manual-check-update');
     const manualBtnTxt = $('#btn-manual-check-update-text');
     const svgIcon = $('#btn-update-svg-icon');
-    const lang = localStorage.getItem('suylios_language') || 'tr';
+    const lang = window.CURRENT_LANG || safeStorageGet('suylios_language', 'tr');
     try {
       if (manual && manualBtnTxt) {
         manualBtnTxt.textContent = lang === 'en' ? 'Checking...' : 'Kontrol ediliyor...';
@@ -332,7 +499,7 @@
 
       if (res && res.ok && res.has_update) {
         if (!manual) {
-          const reminded = localStorage.getItem('suylios_update_remind');
+          const reminded = safeStorageGet('suylios_update_remind');
           if (reminded && (Date.now() - parseInt(reminded, 10)) < 12 * 3600 * 1000) {
             return;
           }
@@ -410,7 +577,7 @@
           await callApi('perform_update', res.download_url);
         };
         remindBtn.onclick = () => {
-          localStorage.setItem('suylios_update_remind', Date.now().toString());
+          safeStorageSet('suylios_update_remind', Date.now().toString());
           modal.classList.add('hidden');
         };
 
@@ -471,7 +638,9 @@
     });
   }
 
+  let _pageExitTimer = null;
   function switchPage(page) {
+    if (page === state.currentPage) return;
     const pages = { main: dom.pageMain, settings: dom.pageSettings, history: dom.pageHistory, scheduled: dom.pageScheduled, converter: dom.pageConverter };
     const currentEl = pages[state.currentPage];
     const targetEl = pages[page];
@@ -479,25 +648,32 @@
 
     dom.navBtns.forEach(b => b.classList.toggle('active', b.dataset.page === page));
 
-    currentEl.classList.remove('active');
-    currentEl.classList.add('exit-left');
+    if (_pageExitTimer) {
+      clearTimeout(_pageExitTimer);
+      _pageExitTimer = null;
+    }
+    Object.values(pages).forEach(p => { if (p && p !== targetEl) p.classList.remove('exit-left', 'active'); });
 
-    requestAnimationFrame(() => {
-      targetEl.classList.remove('exit-left');
+    const isGtkPerf = document.documentElement.classList.contains('gtk-perf');
+    if (isGtkPerf) {
       targetEl.classList.add('active');
-    });
-
-    setTimeout(() => {
-      currentEl.classList.remove('exit-left');
-    }, 400);
+    } else {
+      currentEl.classList.add('exit-left');
+      requestAnimationFrame(() => {
+        targetEl.classList.remove('exit-left');
+        targetEl.classList.add('active');
+      });
+      _pageExitTimer = setTimeout(() => {
+        currentEl.classList.remove('exit-left');
+        _pageExitTimer = null;
+      }, 170);
+    }
 
     state.currentPage = page;
     if (page === 'history') {
-      renderHistory();
+      requestAnimationFrame(() => renderHistory());
     } else if (page === 'scheduled') {
       toggleScheduledEmptyState();
-    } else if (page === 'converter') {
-      // converter page shown — nothing extra needed
     }
   }
 
@@ -648,18 +824,90 @@
   }
 
   // ─── DOWNLOAD POLLING & CLIPBOARD MONITOR ───
+  const POLL_ACTIVE_MS = 450;
+  const POLL_IDLE_MS = 1500;
+  let _pollingActive = false;
+
+  function hasActiveDownloads(downloads) {
+    if (!downloads) return false;
+    for (const dl of downloads) {
+      if (
+        (dl.status === 'queued' && !(dl.scheduled_at && dl.scheduled_at > 0)) ||
+        dl.status === 'downloading' ||
+        dl.status === 'converting' ||
+        dl.status === 'merging'
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function scheduleNextDownloadPoll(delayMs) {
+    if (!_pollingActive) return;
+    if (state.pollInterval) {
+      clearTimeout(state.pollInterval);
+      state.pollInterval = null;
+    }
+    state.pollInterval = setTimeout(async () => {
+      state.pollInterval = null;
+      await refreshDownloads();
+    }, delayMs);
+  }
+
   function startDownloadPolling() {
+    _pollingActive = true;
+    if (state.pollInterval) {
+      clearTimeout(state.pollInterval);
+      state.pollInterval = null;
+    }
     refreshDownloads();
-    state.pollInterval = setInterval(refreshDownloads, 1000);
   }
 
   let lastClipboardUrl = '';
-  function startClipboardMonitor() {
-    setInterval(async () => {
-      const isEnabled = $('#setting-clipboard-monitor')?.checked ?? state.settings?.clipboard_monitor ?? true;
-      if (!isEnabled || state.currentPage !== 'main') return;
+  let _clipPollInFlight = false;
 
-      const text = await callApi('get_clipboard_text');
+  // Python arka plan pano izleyicisi Anında İndir tetiklediğinde arayüzü senkronlar
+  window._onAutoDownloadAdded = function(url) {
+    try {
+      const cleaned = String(url || '').trim();
+      if (cleaned) {
+        lastClipboardUrl = cleaned;
+        if (dom.urlInput && dom.urlInput.value.trim() === cleaned) {
+          dom.urlInput.value = '';
+        }
+      }
+      dom.clipboardBanner?.classList.add('hidden');
+      flashUrlBar();
+      const lang = window.CURRENT_LANG || 'tr';
+      showToast(lang === 'en' ? 'Download added from clipboard' : 'Panodan indirme eklendi', 'success');
+      refreshDownloads();
+    } catch (e) {}
+  };
+
+  async function _checkClipboardForBanner() {
+    if (_clipPollInFlight || document.hidden || state.currentPage !== 'main') return;
+    const isEnabled = $('#setting-clipboard-monitor')?.checked ?? state.settings?.clipboard_monitor ?? true;
+    if (!isEnabled) return;
+
+    const autoDownloadEl = $('#setting-clipboard-auto-download');
+    const autoDownloadRowVisible = $('#clipboard-auto-download-row')?.style.display !== 'none';
+    const autoDownload = autoDownloadRowVisible && (autoDownloadEl?.checked === true || state.settings?.clipboard_auto_download === true);
+    // Anında İndir açıkken indirme doğrudan Python arka plan izleyicisinden anında başlar
+    if (autoDownload) return;
+
+    _clipPollInFlight = true;
+    try {
+      const [text, lastAuto] = await Promise.all([
+        callApi('get_clipboard_text'),
+        callApi('get_last_auto_clipboard_url'),
+      ]);
+      if (lastAuto && typeof lastAuto === 'string' && lastAuto.trim()) {
+        if (lastAuto.trim() === (text || '').trim()) {
+          lastClipboardUrl = lastAuto.trim();
+          return;
+        }
+      }
       if (text && typeof text === 'string') {
         const cleaned = text.trim();
         if (cleaned !== lastClipboardUrl && isValidUrl(cleaned)) {
@@ -667,18 +915,23 @@
           if (dom.urlInput && dom.urlInput.value !== cleaned) {
             dom.urlInput.value = cleaned;
             flashUrlBar();
-            const autoDownloadEl = $('#setting-clipboard-auto-download');
-            const autoDownloadRowVisible = $('#clipboard-auto-download-row')?.style.display !== 'none';
-            const autoDownload = autoDownloadRowVisible && (autoDownloadEl?.checked === true) && (state.settings?.clipboard_auto_download === true);
-            if (autoDownload) {
-              startDownload();
-            } else {
-              showClipboardBanner(cleaned);
-            }
+            showClipboardBanner(cleaned);
           }
         }
       }
-    }, 1500);
+    } finally {
+      _clipPollInFlight = false;
+    }
+  }
+
+  function startClipboardMonitor() {
+    setInterval(_checkClipboardForBanner, 1800);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        _checkClipboardForBanner();
+        refreshDownloads();
+      }
+    });
   }
 
   function showClipboardBanner(url) {
@@ -704,11 +957,45 @@
     }
   }
 
-  async function renderHistory() {
+  let _lastHistorySig = '';
+  let _historyDelegated = false;
+  async function renderHistory(force = false) {
     if (!dom.historyList) return;
+    if (!_historyDelegated) {
+      _historyDelegated = true;
+      dom.historyList.addEventListener('click', async (e) => {
+        const previewBtn = e.target.closest('.btn-preview-hist');
+        if (previewBtn) {
+          if (window.openPreviewPlayer) window.openPreviewPlayer(previewBtn.dataset.id);
+          return;
+        }
+        const openBtn = e.target.closest('.btn-open-hist');
+        if (openBtn) {
+          callApi('open_file_location', openBtn.dataset.id);
+          return;
+        }
+        const delBtn = e.target.closest('.btn-del-hist');
+        if (delBtn) {
+          await callApi('delete_history_item', delBtn.dataset.id);
+          _lastHistorySig = '';
+          renderHistory(true);
+          const delToast = window.CURRENT_LANG === 'en' ? 'Record deleted' : 'Kayıt silindi';
+          showToast(delToast, 'info');
+        }
+      });
+    }
+
     const history = await callApi('get_history') || [];
+    const lang = window.CURRENT_LANG || 'tr';
+    const firstId = history[0]?.id || '';
+    const lastId = history[history.length - 1]?.id || '';
+    const histSig = `${history.length}|${firstId}|${lastId}|${lang}`;
+    if (!force && histSig === _lastHistorySig && dom.historyList.children.length === history.length) {
+      return;
+    }
+    _lastHistorySig = histSig;
+
     dom.historyList.innerHTML = '';
-    
     const emptyEl = dom.historyEmpty || $('#history-empty');
     if (history.length === 0) {
       if (emptyEl) emptyEl.classList.remove('hidden');
@@ -716,21 +1003,21 @@
     }
     if (emptyEl) emptyEl.classList.add('hidden');
 
-    const lang = window.CURRENT_LANG || 'tr';
     const completedWord = lang === 'en' ? 'Completed' : 'Tamamlandı';
     const otherWord = lang === 'en' ? 'Other' : 'Diğer';
     const openFolderText = lang === 'en' ? 'Open Folder' : 'Klasörü Aç';
     const deleteText = lang === 'en' ? 'Remove from list' : 'Listeden Sil';
 
+    const frag = document.createDocumentFragment();
     history.forEach(item => {
       const card = document.createElement('div');
       card.className = 'history-card';
       const sizeStr = item.total_bytes ? formatSize(item.total_bytes) : completedWord;
       const extractor = item.extractor_name || otherWord;
-      
-      const thumbContent = item.thumbnail ? `<img src="${item.thumbnail}" style="width:100%; height:100%; object-fit:cover; border-radius:10px;">` : `📁`;
-      const formatChip = item.format_type ? `<span style="background:rgba(0, 240, 255, 0.15); color:var(--accent-cyan); padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; text-transform:uppercase; border:1px solid rgba(0,240,255,0.3);">${item.format_type}</span>` : '';
-      const qualityChip = item.quality && item.quality !== 'best' ? `<span style="background:rgba(168, 85, 247, 0.15); color:#c084fc; padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; border:1px solid rgba(168,85,247,0.3);">${item.quality}</span>` : '';
+
+      const thumbContent = item.thumbnail ? `<img src="${escapeHtml(item.thumbnail)}" loading="lazy" decoding="async" style="width:100%; height:100%; object-fit:cover; border-radius:10px;">` : `📁`;
+      const formatChip = item.format_type ? `<span style="background:rgba(0, 240, 255, 0.15); color:var(--accent-cyan); padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; text-transform:uppercase; border:1px solid rgba(0,240,255,0.3);">${escapeHtml(item.format_type)}</span>` : '';
+      const qualityChip = item.quality && item.quality !== 'best' ? `<span style="background:rgba(168, 85, 247, 0.15); color:#c084fc; padding:2px 8px; border-radius:6px; font-weight:700; font-size:11px; border:1px solid rgba(168,85,247,0.3);">${escapeHtml(item.quality)}</span>` : '';
 
       card.innerHTML = `
         <div class="history-card-left">
@@ -740,7 +1027,7 @@
             <div class="history-card-meta" style="flex-wrap:wrap; gap:8px;">
               ${formatChip}
               ${qualityChip}
-              <span>📅 ${item.date_str || ''}</span>
+              <span>📅 ${escapeHtml(item.date_str || '')}</span>
               <span>📦 ${sizeStr}</span>
               <span style="color:var(--text-accent);">🏷️ ${escapeHtml(extractor)}</span>
             </div>
@@ -752,80 +1039,86 @@
           <button class="btn-secondary btn-sm btn-del-hist" data-id="${item.id}" title="${deleteText}" style="color:#ef4444; border-color:rgba(239,68,68,0.3);">🗑️</button>
         </div>
       `;
-      
-      const previewBtn = card.querySelector('.btn-preview-hist');
-      if (previewBtn) {
-        previewBtn.addEventListener('click', () => {
-          if (window.openPreviewPlayer) window.openPreviewPlayer(item.id);
-        });
-      }
-      const openBtn = card.querySelector('.btn-open-hist');
-      if (openBtn) {
-        openBtn.addEventListener('click', () => {
-          callApi('open_file_location', item.id);
-        });
-      }
-      const delBtn = card.querySelector('.btn-del-hist');
-      if (delBtn) {
-        delBtn.addEventListener('click', async () => {
-          await callApi('delete_history_item', item.id);
-          renderHistory();
-          const delToast = window.CURRENT_LANG === 'en' ? 'Record deleted' : 'Kayıt silindi';
-          showToast(delToast, 'info');
-        });
-      }
-      dom.historyList.appendChild(card);
+      frag.appendChild(card);
     });
+    dom.historyList.appendChild(frag);
   }
 
   let _refreshingDownloads = false;
+  let _refreshPending = false;
+  let _lastOrderSig = '';
   async function refreshDownloads() {
-    if (_refreshingDownloads) return;
+    if (_refreshingDownloads) {
+      _refreshPending = true;
+      return;
+    }
     _refreshingDownloads = true;
+    let hasActive = false;
     try {
-      const downloads = await callApi('get_downloads');
-      if (!downloads) return;
+      do {
+        _refreshPending = false;
+        const downloads = await callApi('get_downloads');
+        if (!downloads) {
+          hasActive = hasActiveDownloads(state.downloads.values());
+          continue;
+        }
+        hasActive = hasActiveDownloads(downloads);
 
-      const newIds = new Set();
+        const newIds = new Set();
+        let orderChanged = false;
+        const orderSig = downloads.map(d => d.id + ':' + (d.scheduled_at || 0)).join(',');
+        if (orderSig !== _lastOrderSig) {
+          _lastOrderSig = orderSig;
+          orderChanged = true;
+        }
 
-      for (const dl of downloads) {
-        try {
-          newIds.add(dl.id);
-          const existing = state.downloads.get(dl.id);
-          state.downloads.set(dl.id, dl);
+        for (const dl of downloads) {
+          try {
+            newIds.add(dl.id);
+            const existing = state.downloads.get(dl.id);
+            state.downloads.set(dl.id, dl);
 
-          if (existing) {
-            if (existing.status !== 'completed' && dl.status === 'completed') {
-              showToast(`${dl.title || 'İndirme'} tamamlandı!`, 'success');
-              // Fire-and-forget: don't await notification to avoid blocking refresh
-              callApi('show_desktop_notification', 'Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`).catch(() => {});
-            } else if (existing.status !== 'error' && dl.status === 'error') {
-              showToast(`${dl.title || 'İndirme'} başarısız oldu!`, 'error');
-              callApi('show_desktop_notification', 'Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`).catch(() => {});
+            if (existing) {
+              if (existing.status !== 'completed' && dl.status === 'completed') {
+                showToast(`${dl.title || 'İndirme'} tamamlandı!`, 'success');
+                // Fire-and-forget: don't await notification to avoid blocking refresh
+                callApi('show_desktop_notification', 'Suylios Downloader', `${dl.title || 'Dosya'} başarıyla indirildi!`).catch(() => {});
+              } else if (existing.status !== 'error' && dl.status === 'error') {
+                showToast(`${dl.title || 'İndirme'} başarısız oldu!`, 'error');
+                callApi('show_desktop_notification', 'Suylios - Hata', `${dl.title || 'Dosya'} indirilemedi`).catch(() => {});
+              }
+              updateDownloadCard(dl);
+            } else {
+              createDownloadCard(dl);
+              orderChanged = true;
             }
-            updateDownloadCard(dl);
-          } else {
-            createDownloadCard(dl);
+          } catch(cardErr) {
+            console.error('[Suylios] Card update error:', cardErr);
           }
-        } catch(cardErr) {
-          console.error('[Suylios] Card update error:', cardErr);
         }
-      }
 
-      // Remove cards no longer in list
-      for (const [id] of state.downloads) {
-        if (!newIds.has(id)) {
-          removeDownloadCard(id);
-          state.downloads.delete(id);
+        // Remove cards no longer in list
+        for (const [id] of state.downloads) {
+          if (!newIds.has(id)) {
+            removeDownloadCard(id);
+            state.downloads.delete(id);
+            orderChanged = true;
+          }
         }
-      }
 
-      updateStatusBar(downloads);
-      toggleEmptyState();
-      toggleScheduledEmptyState();
-      updateReorderButtonsVisibility();
+        updateStatusBar(downloads);
+        if (orderChanged) {
+          toggleEmptyState();
+          toggleScheduledEmptyState();
+          updateReorderButtonsVisibility();
+        }
+      } while (_refreshPending);
     } finally {
       _refreshingDownloads = false;
+      const delay = document.hidden
+        ? 3000
+        : (hasActive ? (state.currentPage === 'main' ? POLL_ACTIVE_MS : 1000) : POLL_IDLE_MS);
+      scheduleNextDownloadPoll(delay);
     }
   }
 
@@ -909,14 +1202,66 @@
       toggleEmptyState();
     }
 
+    const renderSig = [
+      dl.status || '',
+      dl.status_detail || '',
+      Math.round((dl.progress || 0) * 10),
+      Math.round(dl.speed || 0),
+      dl.downloaded_size || 0,
+      dl.total_size || 0,
+      dl.eta || 0,
+      dl.item_index || 0,
+      dl.item_count || 0,
+      dl.title || '',
+      dl.filename || '',
+      dl.thumbnail || '',
+      dl.error_message || dl.error || '',
+      dl.scheduled_at || 0,
+      window.CURRENT_LANG || 'tr',
+    ].join('|');
+    if (card.dataset.renderSig === renderSig) return;
+    card.dataset.renderSig = renderSig;
     card.dataset.status = dl.status || 'downloading';
     populateCard(card, dl);
+  }
+
+  function formatStatusDetail(rawDetail, lang) {
+    const detail = String(rawDetail || '').trim();
+    if (!detail) return '';
+    if (lang !== 'en') return detail;
+    if (detail.includes(' • ')) {
+      return detail.split(' • ').map(part => formatStatusDetail(part, lang)).join(' • ');
+    }
+    const exactMap = {
+      'Sayfa bilgisi alınıyor...': 'Fetching page info...',
+      'Sıra bekleniyor...': 'Waiting in queue...',
+      'Bağlantı hazırlanıyor...': 'Preparing connection...',
+      'Adres çözülüyor & imzalanıyor...': 'Resolving & signing URL...',
+      'Sunucu yoklanıyor...': 'Probing server...',
+      'Sunucu bağlanıyor...': 'Connecting to server...',
+      'Tek bağlantı iniyor': 'Single connection',
+      'Parçalar birleştiriliyor...': 'Merging parts...',
+      'Video kırpılıyor...': 'Trimming video...',
+      'Video ve ses birleştiriliyor...': 'Merging video & audio...',
+      'Dönüştürülüyor...': 'Converting...',
+      'İndiriliyor...': 'Downloading...',
+    };
+    if (exactMap[detail]) return exactMap[detail];
+    return detail
+      .replace(/(\d+)\s+eşzamanlı$/g, '$1 concurrent')
+      .replace(/(\d+)\s+dosya paralel iniyor/g, '$1 files in parallel')
+      .replace(/(\d+)\s+parça bağlanıyor\.\.\./g, 'Connecting $1 parts...')
+      .replace(/(\d+)\s+parça paralel iniyor/g, '$1 parts in parallel')
+      .replace(/Kuyruk sonu hızlandırılıyor \((\d+) parça\)/g, 'Accelerating tail ($1 parts)')
+      .replace(/Yavaş soket yenileniyor \((\d+) parça\)/g, 'Refreshing slow socket ($1 parts)')
+      .replace(/([A-Z0-9]+)\s+arşivleniyor\.\.\./g, 'Archiving ($1)...');
   }
 
   function populateCard(card, dl) {
     const title = card.querySelector('.card-title');
     const subtitle = card.querySelector('.card-subtitle');
     const badge = card.querySelector('.status-badge');
+    const detailPill = card.querySelector('.status-detail-pill');
     const progressFill = card.querySelector('.progress-fill');
     const progressGlow = card.querySelector('.progress-glow');
     const progressPercent = card.querySelector('.progress-percent');
@@ -941,41 +1286,44 @@
     }
     if (dl.item_count && dl.item_count > 1 && !isComplete && dl.item_index > 0) {
       const idx = dl.item_index;
-      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${idx}/${dl.item_count}</span><span style="vertical-align: middle;">${displayTitle}</span>`;
+      if (title) title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${idx}/${dl.item_count}</span><span style="vertical-align: middle;">${displayTitle}</span>`;
     } else if (!dl.item_count && dl.item_index > 0 && !isComplete) {
       // Gallery/watcher mode: unknown total, show just downloaded count
-      title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${displayTitle}</span>`;
+      if (title) title.innerHTML = `<span style="background: linear-gradient(135deg, var(--accent-cyan), #0080ff); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,240,255,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${displayTitle}</span>`;
     } else if (dl.item_count && dl.item_count > 1 && isComplete) {
       // Completed playlist/archive — show title + total count chip
-      title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_count} öğe</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
+      if (title) title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_count} öğe</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
     } else if (!dl.item_count && dl.item_index > 0 && isComplete) {
       // Gallery completed: show final file count
-      title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
+      if (title) title.innerHTML = `<span style="background: linear-gradient(135deg, #00e87a, #00b85a); color: #000; padding: 2px 8px; border-radius: 12px; font-weight: 800; font-size: 12px; margin-right: 8px; box-shadow: 0 0 10px rgba(0,232,122,0.4); display: inline-block; vertical-align: middle; flex-shrink:0;">${dl.item_index} dosya</span><span style="vertical-align: middle;">${escapeHtml(rawTitle)}</span>`;
     } else {
-      title.textContent = rawTitle;
+      if (title) title.textContent = rawTitle;
     }
 
     if (dl.scheduled_at && dl.scheduled_at > 0) {
       const dtStr = new Date(dl.scheduled_at * 1000).toLocaleString();
-      subtitle.innerHTML = `<span style="color:var(--accent-purple); font-weight:700;">⏰ ${dtStr}</span> • ${escapeHtml(truncateUrl(dl.url || ''))}`;
+      if (subtitle) subtitle.innerHTML = `<span style="color:var(--accent-purple); font-weight:700;">⏰ ${dtStr}</span> • ${escapeHtml(truncateUrl(dl.url || ''))}`;
     } else {
-      subtitle.textContent = truncateUrl(dl.url || '');
+      if (subtitle) subtitle.textContent = truncateUrl(dl.url || '');
     }
 
     const siteIcon = card.querySelector('.card-site-icon');
     if (siteIcon && dl.thumbnail) {
-      siteIcon.innerHTML = `<img src="${dl.thumbnail}" class="card-thumb-img" alt="">`;
+      const existingImg = siteIcon.querySelector('.card-thumb-img');
+      if (!existingImg || existingImg.dataset.src !== dl.thumbnail) {
+        siteIcon.innerHTML = `<img src="${dl.thumbnail}" data-src="${escapeHtml(dl.thumbnail)}" class="card-thumb-img" alt="">`;
+      }
     }
 
     const progress = Math.min(100, Math.max(0, dl.progress || 0));
-    progressFill.style.width = progress + '%';
-    progressGlow.style.width = progress + '%';
+    if (progressFill) progressFill.style.width = progress + '%';
+    if (progressGlow) progressGlow.style.width = progress + '%';
     if (progress > 0 || (dl.total_size && dl.total_size > 0)) {
-      progressPercent.textContent = Math.round(progress) + '%';
+      if (progressPercent) progressPercent.textContent = Math.round(progress) + '%';
     } else if (dl.downloaded_size && dl.downloaded_size > 0 && dl.status === 'downloading') {
-      progressPercent.textContent = '⏳ (~%)';
+      if (progressPercent) progressPercent.textContent = '⏳ (~%)';
     } else {
-      progressPercent.textContent = Math.round(progress) + '%';
+      if (progressPercent) progressPercent.textContent = Math.round(progress) + '%';
     }
     const lang = window.CURRENT_LANG || 'tr';
     const completedText = lang === 'en' ? 'Completed' : 'Tamamlandı';
@@ -988,6 +1336,12 @@
       const finalSize = dl.total_size || dl.downloaded_size || 0;
       pSize = finalSize > 0 ? formatSize(finalSize) : '';
       pEta = completedText;
+    } else if (dl.status === 'error') {
+      pSpeed = '';
+      pEta = dl.error_message || dl.error || (lang === 'en' ? 'Error occurred' : 'Hata oluştu');
+    } else if (dl.status === 'cancelled') {
+      pSpeed = '';
+      pEta = lang === 'en' ? 'Cancelled' : 'İptal edildi';
     } else {
       if (dl.total_size && dl.total_size > 0) {
         pSize = formatSizeRange(dl.downloaded_size, dl.total_size);
@@ -997,6 +1351,9 @@
 
       if (dl.scheduled_at && dl.scheduled_at > 0) {
         pEta = lang === 'en' ? '⏰ Waiting for scheduled time...' : '⏰ İndirme zamanı bekleniyor...';
+      } else if (dl.status === 'paused') {
+        pSpeed = '0 B/s';
+        pEta = lang === 'en' ? 'Paused' : 'Duraklatıldı';
       } else if (dl.status === 'converting') {
         pEta = dl.format_type === 'mp3' ? '🎵 MP3 formatına dönüştürülüyor...' : '⚙️ Dönüştürülüyor...';
       } else if (dl.status === 'merging') {
@@ -1009,9 +1366,9 @@
     const detailsContainer = card.querySelector('.progress-details');
     if (detailsContainer) {
       const parts = [];
-      if (dl.status !== 'completed' && dl.status !== 'complete') parts.push(`<span class="progress-speed">${pSpeed}</span>`);
+      if (pSpeed && dl.status !== 'completed' && dl.status !== 'complete') parts.push(`<span class="progress-speed">${pSpeed}</span>`);
       if (pSize) parts.push(`<span class="progress-size">${pSize}</span>`);
-      if (pEta) parts.push(`<span class="progress-eta">${pEta}</span>`);
+      if (pEta) parts.push(`<span class="progress-eta">${escapeHtml(pEta)}</span>`);
       detailsContainer.innerHTML = parts.join(' <span class="progress-separator">•</span> ');
     }
 
@@ -1034,31 +1391,56 @@
       statusInfo = statusMap[dl.status] || { text: dl.status, class: '' };
     }
 
-    badge.textContent = statusInfo.text;
-    badge.className = 'status-badge ' + statusInfo.class;
+    if (badge) {
+      badge.textContent = statusInfo.text;
+      badge.className = 'status-badge ' + statusInfo.class;
+    }
+
+    if (detailPill) {
+      const showDetail = !['completed', 'complete', 'error', 'cancelled', 'paused'].includes(dl.status)
+        && !(dl.scheduled_at && dl.scheduled_at > 0);
+      const rawDetail = showDetail ? (dl.status_detail || '') : '';
+      const localizedDetail = formatStatusDetail(rawDetail, lang);
+      if (localizedDetail) {
+        detailPill.textContent = localizedDetail;
+        const lower = rawDetail.toLowerCase();
+        let stageCls = 'status-detail-pill';
+        if (lower.includes('birleştir') || lower.includes('arşivlen') || lower.includes('kırpıl') || lower.includes('dönüştür') || lower.includes('hızlandır')) {
+          stageCls += ' stage-merge';
+        } else if (lower.includes('yenilen') || lower.includes('yoklan')) {
+          stageCls += ' stage-retry';
+        }
+        detailPill.className = stageCls;
+      } else {
+        detailPill.textContent = '';
+        detailPill.className = 'status-detail-pill hidden';
+      }
+    }
 
     const previewBtn = card.querySelector('.btn-preview');
     const pauseBtn = card.querySelector('.btn-pause');
     const cancelBtn = card.querySelector('.btn-cancel');
 
     if (pauseBtn) {
-      if (dl.status === 'paused') {
-        pauseBtn.title = 'Devam Et';
-        pauseBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
-      } else {
-        pauseBtn.title = 'Duraklat';
-        pauseBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+      const nextMode = dl.status === 'paused' ? 'resume' : 'pause';
+      if (pauseBtn.dataset.iconMode !== nextMode) {
+        pauseBtn.dataset.iconMode = nextMode;
+        if (nextMode === 'resume') {
+          pauseBtn.title = 'Devam Et';
+          pauseBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
+        } else {
+          pauseBtn.title = 'Duraklat';
+          pauseBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+        }
       }
     }
 
-    // Complete: show ETA as "Tamamlandı", show preview button, hide pause/cancel
+    // Complete: show preview button, hide pause/cancel
     const retryBtn = card.querySelector('.btn-retry');
     if (dl.status === 'complete' || dl.status === 'completed') {
-      progressPercent.textContent = '100%';
-      progressEta.textContent = completedText;
-      progressSpeed.textContent = '';
-      progressFill.style.width = '100%';
-      progressGlow.style.width = '100%';
+      if (progressPercent) progressPercent.textContent = '100%';
+      if (progressFill) progressFill.style.width = '100%';
+      if (progressGlow) progressGlow.style.width = '100%';
       if (previewBtn) previewBtn.classList.remove('hidden');
       if (pauseBtn) pauseBtn.classList.add('hidden');
       if (cancelBtn) cancelBtn.classList.add('hidden');
@@ -1071,24 +1453,18 @@
     } else {
       if (previewBtn) previewBtn.classList.add('hidden');
       if (retryBtn) retryBtn.classList.add('hidden');
-      if (pauseBtn && dl.status !== 'error' && dl.status !== 'cancelled') pauseBtn.classList.remove('hidden');
-      if (cancelBtn && dl.status !== 'error' && dl.status !== 'cancelled') cancelBtn.classList.remove('hidden');
+      if (pauseBtn) pauseBtn.classList.remove('hidden');
+      if (cancelBtn) cancelBtn.classList.remove('hidden');
     }
 
-    if (dl.status === 'error') {
-      progressEta.textContent = dl.error_message || dl.error || 'Hata oluştu';
-    }
-    if (dl.status === 'cancelled') {
-      progressEta.textContent = 'İptal edildi';
-      progressSpeed.textContent = '';
-    }
-
+    const curEta = card.querySelector('.progress-eta');
+    const curSize = card.querySelector('.progress-size');
     const map = lang === 'en' ? TR_TO_EN : EN_TO_TR;
     if (badge && map[badge.textContent.trim()]) badge.textContent = map[badge.textContent.trim()];
-    if (progressEta && map[progressEta.textContent.trim()]) progressEta.textContent = map[progressEta.textContent.trim()];
-    if (progressSize) {
-      if (lang === 'en') progressSize.textContent = progressSize.textContent.replace('Tamamlandı', 'Completed');
-      else progressSize.textContent = progressSize.textContent.replace('Completed', 'Tamamlandı');
+    if (curEta && map[curEta.textContent.trim()]) curEta.textContent = map[curEta.textContent.trim()];
+    if (curSize) {
+      if (lang === 'en') curSize.textContent = curSize.textContent.replace('Tamamlandı', 'Completed');
+      else curSize.textContent = curSize.textContent.replace('Completed', 'Tamamlandı');
     }
     card.querySelectorAll('.card-action-btn').forEach(b => {
       const t = b.getAttribute('title');
@@ -1113,6 +1489,7 @@
       const result = await callApi('retry_download', taskId);
       if (result?.ok) {
         showToast(`${dl?.title || 'İndirme'} yeniden başlatıldı.`, 'info');
+        await refreshDownloads();
       } else {
         showToast('Yeniden indirme başlatılamadı.', 'error');
       }
@@ -1125,11 +1502,13 @@
       } else {
         await callApi('pause_download', taskId);
       }
+      await refreshDownloads();
     });
 
     cancelBtn?.addEventListener('click', async () => {
       await callApi('cancel_download', taskId);
       showToast('İndirme iptal edildi', 'info');
+      await refreshDownloads();
     });
 
     folderBtn?.addEventListener('click', () => {
@@ -1141,6 +1520,7 @@
       removeDownloadCard(taskId);
       state.downloads.delete(taskId);
       toggleEmptyState();
+      await refreshDownloads();
     });
   }
 
@@ -1236,8 +1616,20 @@
         $(`#tab-${tab}`)?.classList.add('active');
 
         state.currentSettingsTab = tab;
+        if (tab === 'about') {
+          refreshUpdateCenter(false);
+        }
       });
     });
+  }
+
+  function clampSegmentedConnectionsValue(raw, finalize = true) {
+    const digits = String(raw ?? '').replace(/[^0-9]/g, '');
+    if (!digits) return finalize ? 8 : '';
+    const parsed = parseInt(digits, 10);
+    if (Number.isNaN(parsed)) return finalize ? 8 : '';
+    if (parsed > 32) return 32;
+    return finalize ? Math.max(2, parsed) : digits;
   }
 
   // ─── SETTINGS CONTROLS ───
@@ -1258,7 +1650,7 @@
 
     // Browse FFmpeg
     dom.btnBrowseFFmpeg?.addEventListener('click', async () => {
-      const path = await callApi('pick_folder');
+      const path = await callApi('pick_file', ['FFmpeg Binary (*.*)', 'Tüm Dosyalar (*.*)']);
       if (path) {
         $('#setting-ffmpeg-path').value = path;
         saveCurrentSettings();
@@ -1301,13 +1693,11 @@
         if (e) e.preventDefault();
         const ok = await customConfirm('Tüm ayarlar varsayılan değerlerine sıfırlanacak. Emin misiniz?', 'Ayarları Sıfırla', 'Sıfırla', true);
       if (ok) {
-        if (window.pywebview && pywebview.api && pywebview.api.reset_settings) {
-          const res = await pywebview.api.reset_settings();
-          if (res && res.ok) {
-            applySettingsToUI(res.settings);
-            showToast('Ayarlar başarıyla sıfırlandı', 'success');
-            return;
-          }
+        const res = await callApi('reset_settings');
+        if (res && res.ok) {
+          applySettingsToUI(res.settings);
+          showToast('Ayarlar başarıyla sıfırlandı', 'success');
+          return;
         }
         showToast('Ayarlar sıfırlandı', 'info');
       }
@@ -1322,12 +1712,33 @@
       });
     }
 
+    // Strict [2, 32] clamping for maximum segment limit input (prevents 33+ or <2 from sticking)
+    const segConnsEl = $('#setting-segmented-connections');
+    if (segConnsEl && !segConnsEl.dataset.segClampBound) {
+      segConnsEl.dataset.segClampBound = 'true';
+      segConnsEl.addEventListener('input', () => {
+        const clamped = clampSegmentedConnectionsValue(segConnsEl.value, false);
+        if (String(clamped) !== String(segConnsEl.value)) {
+          segConnsEl.value = clamped;
+        }
+      });
+      segConnsEl.addEventListener('blur', () => {
+        const finalized = clampSegmentedConnectionsValue(segConnsEl.value, true);
+        if (String(finalized) !== String(segConnsEl.value)) {
+          segConnsEl.value = finalized;
+          saveCurrentSettings();
+        }
+      });
+    }
+
     // Auto-save on change for all settings inputs
     $$('.settings-tab input, .settings-tab select, #home-compress-archive, #home-compress-format').forEach(el => {
       if (el.dataset.autoSaveBound) return;
       el.dataset.autoSaveBound = 'true';
       el.addEventListener('change', () => {
-        if (el.id === 'setting-language') {
+        if (el.id === 'setting-segmented-connections') {
+          el.value = clampSegmentedConnectionsValue(el.value, true);
+        } else if (el.id === 'setting-language') {
           applyLanguage(el.value);
         } else if (el.id === 'home-compress-archive') {
           const container = $('#home-compress-format-container');
@@ -1388,12 +1799,14 @@
 
   async function applyLanguage(lang) {
     window.CURRENT_LANG = lang;
+    document.documentElement.lang = lang === 'en' ? 'en' : 'tr';
     try { localStorage.setItem('suylios_language', lang); } catch(e) {}
     await loadLocaleDictionary(lang);
+    if (window.CURRENT_LANG !== lang) return;
     const map = lang === 'en' ? TR_TO_EN : EN_TO_TR;
 
     // Traverse all potential text elements
-    $$('h1, h2, h3, h4, p, span, label, option, button, .sidebar-header, small, .cyber-dropdown-item, .cyber-dropdown-text, .site-tag, .coming-soon-text, .about-version, .about-desc, .about-copyright').forEach(el => {
+    $$('h1, h2, h3, h4, p, span, label, option, button, .sidebar-header, small, .cyber-dropdown-item, .cyber-dropdown-text, .site-tag, .coming-soon-text, .about-version, .about-desc, .about-copyright, .uc-title, .uc-desc, .uc-badge').forEach(el => {
       const txt = el.textContent.trim();
       if (map[txt]) {
         if (el.children.length === 0) {
@@ -1454,8 +1867,12 @@
     const batchBtnEl = $('#btn-batch'); if (batchBtnEl) batchBtnEl.title = lang === 'en' ? 'Batch Download — Add multiple URLs at once' : "Toplu İndirme — Birden fazla URL'yi tek seferde ekle";
     const schedBtnEl = $('#btn-schedule'); if (schedBtnEl) schedBtnEl.title = lang === 'en' ? 'Scheduled Download — Set download for a specific time' : 'Zamanlanmış İndirme — Belirli bir saate indirme kur';
     const trimClearEl = $('#btn-trim-clear'); if (trimClearEl) trimClearEl.title = lang === 'en' ? 'Clear' : 'Temizle';
-    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '1.4.2');
+    const verEl = $('#about-version-text'); if (verEl) verEl.textContent = (lang === 'en' ? 'Version ' : 'Sürüm ') + (state.appVersion || '2.0.0');
     const chkUpdTxt = $('#btn-manual-check-update-text'); if (chkUpdTxt && !chkUpdTxt.textContent.includes('✓') && !chkUpdTxt.textContent.includes('...')) chkUpdTxt.textContent = lang === 'en' ? 'Check for Updates' : 'Güncellemeleri Kontrol Et';
+    const syncRulesBtn = $('#btn-sync-hotfixes'); if (syncRulesBtn) syncRulesBtn.textContent = lang === 'en' ? 'Refresh Rules' : 'Kuralları Yenile';
+    const updToolsBtn = $('#btn-update-engines'); if (updToolsBtn && !updToolsBtn.disabled) updToolsBtn.textContent = lang === 'en' ? 'Update Tools' : 'Araçları Güncelle';
+    const rbToolsBtn = $('#btn-rollback-engines'); if (rbToolsBtn) rbToolsBtn.textContent = lang === 'en' ? 'Revert' : 'Geri Al';
+    if (state.apiReady && typeof refreshUpdateCenter === 'function') refreshUpdateCenter(false);
     const trimKeepEl = $('#trim-keep-text'); if (trimKeepEl) trimKeepEl.textContent = lang === 'en' ? 'Keep original video' : 'Orijinal videoyu sakla';
     const trimKeepLbl = $('#trim-keep-label'); if (trimKeepLbl) trimKeepLbl.title = lang === 'en' ? 'Keep the original file without deleting and cut a copy' : 'Orijinal dosyayı silmeden sakla ve kopyası üzerinde kesim yap';
     const schedDtLbl = $('#schedule-datetime-label'); if (schedDtLbl) schedDtLbl.textContent = lang === 'en' ? 'Date & Time' : 'Tarih & Saat';
@@ -1498,12 +1915,28 @@
       const fmtSelect = document.getElementById('format-select');
       if (fmtSelect) updateDynamicQualityOptions(fmtSelect.value);
     }
+    const _dictMap = lang === 'en' ? TR_TO_EN : EN_TO_TR;
+    $$('option[data-info]').forEach(opt => {
+      if (!opt.dataset.baseInfo) opt.dataset.baseInfo = opt.dataset.info;
+      opt.dataset.info = lang === 'tr'
+        ? opt.dataset.baseInfo
+        : (_dictMap[opt.dataset.baseInfo] || opt.dataset.baseInfo);
+    });
+
     $$('.cyber-dropdown').forEach(custom => {
       const select = custom.parentElement?.querySelector('select');
       if (select) {
         Array.from(select.options).forEach((opt, idx) => {
           const item = custom.querySelectorAll('.cyber-dropdown-item')[idx];
-          if (item) item.textContent = opt.text;
+          if (!item) return;
+          const lbl = item.querySelector('.cyber-dropdown-item-label');
+          if (lbl) lbl.textContent = opt.text;
+          else item.textContent = opt.text;
+
+          const infoBtn = item.querySelector('.cyber-info-btn');
+          if (infoBtn && opt.dataset.info) {
+            infoBtn.dataset.info = opt.dataset.info;
+          }
         });
         if (select.selectedIndex >= 0) {
           const textSpan = custom.querySelector('.cyber-dropdown-text');
@@ -1524,7 +1957,17 @@
     if (settings.language) {
       const langEl = $('#setting-language');
       if (langEl) langEl.value = settings.language;
-      applyLanguage(settings.language);
+      const finishLang = () => {
+        const dictLoaded = settings.language === 'tr' || Object.keys(TR_TO_EN).length > 0;
+        if (window.CURRENT_LANG !== settings.language || !dictLoaded) {
+          applyLanguage(settings.language);
+        }
+      };
+      if (state._initialLangPromise) {
+        Promise.resolve(state._initialLangPromise).then(finishLang);
+      } else {
+        finishLang();
+      }
     }
     if (settings.start_minimized !== undefined) {
       const el = $('#setting-start-minimized');
@@ -1613,6 +2056,50 @@
       const mbVal = settings.speed_limit >= 1048576 ? Math.round(settings.speed_limit / 1048576) : settings.speed_limit;
       if (el) el.value = mbVal;
     }
+    const updateSegmentedControlsState = (enabled) => {
+      const connsEl = $('#setting-segmented-connections');
+      const modeEl = $('#setting-segmented-mode');
+      const connsRow = $('#segmented-connections-row');
+      const modeRow = $('#segmented-mode-row');
+      if (connsEl) connsEl.disabled = !enabled;
+      if (modeEl) modeEl.disabled = !enabled;
+      if (connsRow) {
+        connsRow.style.opacity = enabled ? '1' : '0.5';
+        connsRow.style.pointerEvents = enabled ? '' : 'none';
+      }
+      if (modeRow) {
+        modeRow.style.opacity = enabled ? '1' : '0.5';
+        modeRow.style.pointerEvents = enabled ? '' : 'none';
+      }
+    };
+    const segToggleEl = $('#setting-segmented-download');
+    if (segToggleEl) {
+      if (settings.segmented_download !== undefined) {
+        segToggleEl.checked = settings.segmented_download !== false;
+      }
+      updateSegmentedControlsState(segToggleEl.checked);
+      if (!segToggleEl.dataset.boundSeg) {
+        segToggleEl.dataset.boundSeg = 'true';
+        segToggleEl.addEventListener('change', () => {
+          updateSegmentedControlsState(segToggleEl.checked);
+          saveCurrentSettings();
+        });
+      }
+    }
+    if (settings.segmented_connections !== undefined) {
+      const el = $('#setting-segmented-connections');
+      if (el) el.value = clampSegmentedConnectionsValue(settings.segmented_connections, true);
+    }
+    if (settings.segmented_mode) {
+      const el = $('#setting-segmented-mode');
+      if (el) {
+        const mappedMode = (settings.segmented_mode === 'aggressive' || settings.segmented_mode === 'idm')
+          ? 'turbo'
+          : settings.segmented_mode;
+        el.value = ['adaptive', 'large', 'always', 'turbo'].includes(mappedMode) ? mappedMode : 'adaptive';
+        syncCustomSelects();
+      }
+    }
     if (settings.proxy) {
       const el = $('#setting-proxy');
       if (el) el.value = settings.proxy;
@@ -1673,6 +2160,12 @@
   }
 
   async function saveCurrentSettings() {
+    const segConnsEl = $('#setting-segmented-connections');
+    const clampedSegConns = clampSegmentedConnectionsValue(segConnsEl?.value, true);
+    if (segConnsEl && String(clampedSegConns) !== String(segConnsEl.value)) {
+      segConnsEl.value = clampedSegConns;
+    }
+
     const settings = {
       language: $('#setting-language')?.value || 'tr',
       start_minimized: $('#setting-start-minimized')?.checked || false,
@@ -1695,6 +2188,9 @@
       concurrent_downloads: $('#setting-sequential-download')?.checked ? 1 : (dom.settingConcurrent && dom.settingConcurrent.value !== '' && parseInt(dom.settingConcurrent.value, 10) > 0 ? parseInt(dom.settingConcurrent.value, 10) : 3),
       sequential_download: $('#setting-sequential-download')?.checked ?? false,
       speed_limit: (parseFloat($('#setting-speed-limit')?.value) || 0) * 1024 * 1024,
+      segmented_download: $('#setting-segmented-download')?.checked ?? true,
+      segmented_connections: clampedSegConns,
+      segmented_mode: $('#setting-segmented-mode')?.value || 'adaptive',
       proxy: $('#setting-proxy')?.value || '',
       ffmpeg_path: $('#setting-ffmpeg-path')?.value || '',
       theme: state.settings?.theme || document.body.dataset.theme || 'suylios',
@@ -1750,13 +2246,19 @@
   }
 
   // ─── STATUS BAR ───
+  let _lastStatusBarSig = '';
   function updateStatusBar(downloads) {
     if (!downloads) return;
 
     const active = downloads.filter(d => d.status === 'downloading' || d.status === 'converting' || d.status === 'merging');
     const totalSpeed = active.reduce((sum, d) => sum + (d.speed || 0), 0);
+    const lang = window.CURRENT_LANG || 'tr';
+    const speedText = formatSpeed(totalSpeed);
+    const sig = `${active.length}|${speedText}|${downloads.length}|${lang}`;
+    if (sig === _lastStatusBarSig) return;
+    _lastStatusBarSig = sig;
 
-    const activeLabel = window.CURRENT_LANG === 'en' ? 'active downloads' : 'aktif indirme';
+    const activeLabel = lang === 'en' ? 'active downloads' : 'aktif indirme';
     dom.statusActive.textContent = `${active.length} ${activeLabel}`;
 
     // Update dot
@@ -1770,11 +2272,11 @@
 
     // Speed
     const speedSvg = `<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
-    dom.statusSpeed.innerHTML = `${speedSvg} ${formatSpeed(totalSpeed)}`;
+    dom.statusSpeed.innerHTML = `${speedSvg} ${speedText}`;
 
     // Storage — static for now
     const storageSvg = `<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z"/></svg>`;
-    const fileLabel = window.CURRENT_LANG === 'en' ? 'files' : 'dosya';
+    const fileLabel = lang === 'en' ? 'files' : 'dosya';
     dom.statusStorage.innerHTML = `${storageSvg} ${downloads.length} ${fileLabel}`;
   }
 
@@ -1853,16 +2355,17 @@
   }
 
   function formatEta(seconds) {
-    if (!seconds || seconds <= 0) return 'Hesaplanıyor...';
-    if (seconds < 60) return `${Math.round(seconds)}s kaldı`;
+    const isEn = window.CURRENT_LANG === 'en';
+    if (!seconds || seconds <= 0) return isEn ? 'Calculating...' : 'Hesaplanıyor...';
+    if (seconds < 60) return isEn ? `${Math.round(seconds)}s left` : `${Math.round(seconds)}s kaldı`;
     if (seconds < 3600) {
       const m = Math.floor(seconds / 60);
       const s = Math.round(seconds % 60);
-      return `${m}dk ${s}s kaldı`;
+      return isEn ? `${m}m ${s}s left` : `${m}dk ${s}s kaldı`;
     }
     const h = Math.floor(seconds / 3600);
     const m = Math.round((seconds % 3600) / 60);
-    return `${h}sa ${m}dk kaldı`;
+    return isEn ? `${h}h ${m}m left` : `${h}sa ${m}dk kaldı`;
   }
 
   function truncateUrl(url, maxLen = 60) {
@@ -1871,10 +2374,9 @@
     return url.substring(0, maxLen - 3) + '...';
   }
 
+  const _ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return String(str ?? '').replace(/[&<>"']/g, ch => _ESC_MAP[ch]);
   }
 
   // ─── THEMES & APPEARANCE ───
@@ -1890,7 +2392,7 @@
     if (themeId && themeId.startsWith('custom_')) {
       let themes = themesArray || (state.settings?.custom_themes || []);
       if (themes.length === 0) {
-        try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+        try { themes = JSON.parse(safeStorageGet('suylios_custom_themes', '[]')); } catch(e) {}
       }
       const theme = themes.find(t => t.id === themeId);
       if (theme) {
@@ -1926,7 +2428,7 @@
     }
     
     // Built-in theme or fallback
-    document.body.dataset.theme = themeId || 'suylios';
+    document.body.dataset.theme = themeId || 'basit-beyaz';
     styleTag.textContent = '';
   }
 
@@ -1940,7 +2442,7 @@
     
     let themes = state.settings?.custom_themes || [];
     if (themes.length === 0) {
-      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      try { themes = JSON.parse(safeStorageGet('suylios_custom_themes', '[]')); } catch(e) {}
     }
     if (themes.length === 0) {
       emptyState.style.display = 'block';
@@ -1949,7 +2451,7 @@
     
     emptyState.style.display = 'none';
     
-    const savedTheme = localStorage.getItem('suylios_theme') || 'suylios';
+    const savedTheme = safeStorageGet('suylios_theme', 'basit-beyaz');
     
     themes.forEach(theme => {
       const card = document.createElement('div');
@@ -1994,15 +2496,20 @@
   }
 
   function selectTheme(themeId, silent) {
-    applyCustomTheme(themeId);
-    localStorage.setItem('suylios_theme', themeId);
+    const targetTheme = themeId || 'basit-beyaz';
+    applyCustomTheme(targetTheme);
+    safeStorageSet('suylios_theme', targetTheme);
+    document.documentElement.setAttribute('data-theme', document.body.dataset.theme || targetTheme);
+    if (typeof callApi === 'function') {
+      callApi('set_window_background', targetTheme).catch(() => {});
+    }
     
     document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
-    const activeCard = document.querySelector(`.theme-card[data-theme="${themeId}"]`);
+    const activeCard = document.querySelector(`.theme-card[data-theme="${targetTheme}"]`);
     if (activeCard) activeCard.classList.add('active');
     
     if (state.settings) {
-      state.settings.theme = themeId;
+      state.settings.theme = targetTheme;
       if (!silent) saveCurrentSettings();
     }
     if (!silent) showToast('Tema güncellendi', 'success');
@@ -2012,7 +2519,7 @@
     if (window._themesBound) return;
     window._themesBound = true;
 
-    const savedTheme = localStorage.getItem('suylios_theme') || 'basit-beyaz';
+    const savedTheme = safeStorageGet('suylios_theme', 'basit-beyaz');
     applyCustomTheme(savedTheme);
 
     const builtInCards = document.querySelectorAll('.theme-cards-grid:not(#custom-themes-grid) .theme-card');
@@ -2060,11 +2567,17 @@
       applyCustomTheme(fakeThemeId, [fakeTheme]);
     }
     
+    let _themePreviewRaf = 0;
     colorInputs.forEach(input => {
       input.oninput = (e) => {
         const hexSpan = document.getElementById('hex-' + e.target.id.replace('color-', ''));
         if (hexSpan) hexSpan.textContent = e.target.value;
-        updatePreview();
+        if (!_themePreviewRaf) {
+          _themePreviewRaf = requestAnimationFrame(() => {
+            _themePreviewRaf = 0;
+            updatePreview();
+          });
+        }
       };
     });
     
@@ -2103,14 +2616,14 @@
       btnDelete.style.display = 'none';
       modal.classList.remove('hidden');
       
-      const currentThemeId = localStorage.getItem('suylios_theme') || document.body.dataset.theme || 'suylios';
-      let activeBase = 'suylios';
-      let activeColors = templatePresets['suylios'];
+      const currentThemeId = safeStorageGet('suylios_theme', document.body.dataset.theme || 'basit-beyaz');
+      let activeBase = 'basit-beyaz';
+      let activeColors = templatePresets['basit-beyaz'];
 
       if (currentThemeId.startsWith('custom_')) {
         let customThemes = state.settings?.custom_themes || [];
         if (customThemes.length === 0) {
-          try { customThemes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e){}
+          try { customThemes = JSON.parse(safeStorageGet('suylios_custom_themes', '[]')); } catch(e){}
         }
         const found = customThemes.find(t => t.id === currentThemeId);
         if (found) {
@@ -2182,7 +2695,7 @@
     
     const closeModal = () => {
       modal.classList.add('hidden');
-      const currentTheme = localStorage.getItem('suylios_theme') || 'basit-beyaz';
+      const currentTheme = safeStorageGet('suylios_theme', 'basit-beyaz');
       applyCustomTheme(currentTheme);
     };
     
@@ -2213,7 +2726,7 @@
       
       if (!state.settings) state.settings = {};
       let themes = [];
-      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      try { themes = JSON.parse(safeStorageGet('suylios_custom_themes', '[]')); } catch(e) {}
       if (themes.length === 0 && state.settings.custom_themes) themes = [...state.settings.custom_themes];
       
       const existingIdx = themes.findIndex(t => t.id === id);
@@ -2224,7 +2737,7 @@
       }
       
       state.settings.custom_themes = themes;
-      try { localStorage.setItem('suylios_custom_themes', JSON.stringify(themes)); } catch(e) {}
+      safeStorageSet('suylios_custom_themes', JSON.stringify(themes));
       saveCurrentSettings();
       renderCustomThemes();
       selectTheme(id);
@@ -2241,14 +2754,14 @@
       
       if (!state.settings) state.settings = {};
       let themes = [];
-      try { themes = JSON.parse(localStorage.getItem('suylios_custom_themes') || '[]'); } catch(e) {}
+      try { themes = JSON.parse(safeStorageGet('suylios_custom_themes', '[]')); } catch(e) {}
       if (themes.length === 0 && state.settings.custom_themes) themes = [...state.settings.custom_themes];
 
       themes = themes.filter(t => t.id !== id);
       state.settings.custom_themes = themes;
-      try { localStorage.setItem('suylios_custom_themes', JSON.stringify(themes)); } catch(e) {}
+      safeStorageSet('suylios_custom_themes', JSON.stringify(themes));
       
-      const currentTheme = localStorage.getItem('suylios_theme') || document.body.dataset.theme;
+      const currentTheme = safeStorageGet('suylios_theme', document.body.dataset.theme || 'basit-beyaz');
       if (currentTheme === id) {
         selectTheme('basit-beyaz');
       }
@@ -2398,7 +2911,7 @@
         <div class="site-card glass-panel" style="position: relative;">
           <div class="site-card-header">
             <div class="site-logo">
-              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" class="site-icon-img" alt="${item.name}">
+              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" class="site-icon-img" loading="lazy" decoding="async" alt="${item.name}">
             </div>
             <div class="site-title">
               <h4>${item.name}</h4>
@@ -2506,28 +3019,47 @@
       if (countSpan) countSpan.textContent = `${selectedSiteKeys.size} site seçildi`;
     }
 
+    let _addSiteDelegated = false;
     function renderFilteredList(query) {
       if (!listContainer) return;
+      if (!_addSiteDelegated) {
+        _addSiteDelegated = true;
+        listContainer.addEventListener('change', (e) => {
+          const chk = e.target.closest('.add-site-chk');
+          if (!chk) return;
+          const k = chk.dataset.key;
+          if (chk.checked) selectedSiteKeys.add(k);
+          else selectedSiteKeys.delete(k);
+          updateSelectedCount();
+        });
+      }
+
       const q = (query || '').trim().toLowerCase();
-      const filtered = availableSites.filter(s => {
+      const matched = availableSites.filter(s => {
         if (!q) return true;
-        return s.name.toLowerCase().includes(q) || s.domain.toLowerCase().includes(q) || (s.features && s.features.toLowerCase().includes(q));
-      }).slice(0, 800); // render up to 800 sites for fast mouse dragging and rich scrollbar
+        const caps = (s.features || s.Capabilities || '').toLowerCase();
+        return s.name.toLowerCase().includes(q) || s.domain.toLowerCase().includes(q) || caps.includes(q);
+      });
+      const filtered = matched.slice(0, 200);
 
       if (filtered.length === 0) {
         listContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">Aramanızla eşleşen yeni site bulunamadı.</div>';
         return;
       }
 
+      const extraNote = matched.length > 200
+        ? `<div style="text-align: center; padding: 8px; color: var(--text-muted); font-size: 11.5px;">${matched.length} sonuçtan ilk 200 gösteriliyor — daraltmak için arama yapın</div>`
+        : '';
+
       listContainer.innerHTML = filtered.map(item => {
         const cleanKey = item.domain.replace(/\./g, '_').replace(/[^a-zA-Z0-9_]/g, '');
         const checked = selectedSiteKeys.has(cleanKey) ? 'checked' : '';
         const tagClass = item.engine === 'gallery-dl' ? 'tag-purple' : (item.engine === 'cyberdrop-dl' ? 'tag-cyan' : 'tag-green');
         return `
-          <label class="add-site-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background 0.15s; border-bottom: 1px solid rgba(255,255,255,0.03);">
+          <label class="add-site-row" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.03);">
             <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
               <input type="checkbox" class="add-site-chk" data-key="${cleanKey}" ${checked} style="width: 16px; height: 16px; cursor: pointer;">
-              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=128" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" style="width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;" alt="">
+              <img src="https://www.google.com/s2/favicons?domain=${item.domain}&sz=64" onerror="this.src='https://icons.duckduckgo.com/ip3/${item.domain}.ico'" loading="lazy" decoding="async" style="width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;" alt="">
               <div style="display: flex; flex-direction: column; overflow: hidden;">
                 <span style="font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</span>
                 <span style="font-size: 11px; color: var(--text-muted);">${item.domain}</span>
@@ -2538,16 +3070,7 @@
             </div>
           </label>
         `;
-      }).join('');
-
-      listContainer.querySelectorAll('.add-site-chk').forEach(chk => {
-        chk.addEventListener('change', (e) => {
-          const k = chk.dataset.key;
-          if (chk.checked) selectedSiteKeys.add(k);
-          else selectedSiteKeys.delete(k);
-          updateSelectedCount();
-        });
-      });
+      }).join('') + extraNote;
     }
 
     openBtn.onclick = (e) => { if (e) e.preventDefault(); if (!modal.classList.contains('hidden')) return; openModal(); };
@@ -2556,7 +3079,12 @@
     modal.onclick = (e) => { if (e.target === modal) modal.classList.add('hidden'); };
 
     if (searchInput) {
-      searchInput.addEventListener('input', (e) => renderFilteredList(e.target.value));
+      let _searchTimer = null;
+      searchInput.addEventListener('input', (e) => {
+        clearTimeout(_searchTimer);
+        const val = e.target.value;
+        _searchTimer = setTimeout(() => renderFilteredList(val), 90);
+      });
     }
 
     if (confirmBtn) {
@@ -2582,7 +3110,7 @@
               domain: found.domain,
               folder: cleanFolder,
               engine: found.engine,
-              features: found.features
+              features: found.features || found.Capabilities || ''
             });
             addedCount++;
           }
@@ -2673,25 +3201,91 @@
   }
 
   // ─── CUSTOM CYBER DROPDOWNS ───
+  let _activeInfoBtn = null;
+
+  function _getInfoPopover() {
+    let pop = document.getElementById('cyber-info-popover');
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'cyber-info-popover';
+      pop.className = 'cyber-info-popover';
+      pop.setAttribute('role', 'tooltip');
+      document.body.appendChild(pop);
+    }
+    return pop;
+  }
+
+  function hideCyberInfoPopover() {
+    if (!_activeInfoBtn) return;
+    const pop = document.getElementById('cyber-info-popover');
+    if (pop) pop.classList.remove('visible');
+    _activeInfoBtn.classList.remove('active');
+    _activeInfoBtn = null;
+  }
+
+  function showCyberInfoPopover(btn) {
+    const text = btn?.dataset?.info;
+    if (!text) return;
+    if (_activeInfoBtn && _activeInfoBtn !== btn) {
+      _activeInfoBtn.classList.remove('active');
+    }
+    _activeInfoBtn = btn;
+    btn.classList.add('active');
+
+    const pop = _getInfoPopover();
+    pop.textContent = text;
+    pop.classList.add('visible');
+
+    const rect = btn.getBoundingClientRect();
+    const popRect = pop.getBoundingClientRect();
+    const margin = 10;
+    let left = rect.right - popRect.width + 12;
+    left = Math.max(margin, Math.min(window.innerWidth - popRect.width - margin, left));
+    let top = rect.top - popRect.height - 8;
+    if (top < margin) {
+      top = Math.min(window.innerHeight - popRect.height - margin, rect.bottom + 8);
+    }
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+  }
+
+  function _clearOpenDropdownClasses() {
+    document.querySelectorAll('.cyber-dropdown-menu').forEach(m => {
+      m.classList.add('hidden');
+      m.classList.remove('open-up');
+    });
+    document.querySelectorAll('.cyber-dropdown.active').forEach(d => d.classList.remove('active'));
+    document.querySelectorAll('.has-open-dropdown').forEach(el => el.classList.remove('has-open-dropdown'));
+  }
+
   function setupCustomSelects() {
+    const appContainer = document.getElementById('app-container');
     document.querySelectorAll('.select-wrapper, .setting-control').forEach(wrapper => {
       const select = wrapper.querySelector('select');
       if (!select || wrapper.querySelector('.cyber-dropdown')) return;
       select.style.display = 'none';
 
+      const opts = Array.from(select.options);
+      const hasInfo = opts.some(o => Boolean(o.dataset.info));
       const custom = document.createElement('div');
-      custom.className = 'cyber-dropdown';
+      custom.className = hasInfo ? 'cyber-dropdown has-info-items' : 'cyber-dropdown';
 
       const selectedOpt = select.options[select.selectedIndex];
       custom.innerHTML = `
         <div class="cyber-dropdown-trigger">
-          <span class="cyber-dropdown-text">${selectedOpt?.text || ''}</span>
+          <span class="cyber-dropdown-text">${escapeHtml(selectedOpt?.text || '')}</span>
           <svg class="cyber-arrow" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
         </div>
         <div class="cyber-dropdown-menu hidden">
-          ${Array.from(select.options).map(opt => `
-            <div class="cyber-dropdown-item ${opt.selected ? 'selected' : ''}" data-value="${opt.value}">${opt.text}</div>
-          `).join('')}
+          ${opts.map(opt => {
+            if (opt.dataset.info && !opt.dataset.baseInfo) {
+              opt.dataset.baseInfo = opt.dataset.info;
+            }
+            const infoHtml = opt.dataset.info
+              ? `<button type="button" class="cyber-info-btn" aria-label="Bilgi" data-info="${escapeHtml(opt.dataset.info)}">i</button>`
+              : '';
+            return `<div class="cyber-dropdown-item ${opt.selected ? 'selected' : ''}" data-value="${escapeHtml(opt.value)}"><span class="cyber-dropdown-item-label">${escapeHtml(opt.text)}</span>${infoHtml}</div>`;
+          }).join('')}
         </div>
       `;
 
@@ -2703,12 +3297,9 @@
 
       trigger.addEventListener('click', (e) => {
         e.stopPropagation();
+        hideCyberInfoPopover();
         const isHidden = menu.classList.contains('hidden');
-        document.querySelectorAll('.cyber-dropdown-menu').forEach(m => {
-          m.classList.add('hidden');
-          m.classList.remove('open-up');
-        });
-        document.querySelectorAll('.cyber-dropdown').forEach(d => d.classList.remove('active'));
+        _clearOpenDropdownClasses();
         if (isHidden) {
           // Check if there is enough space below
           const rect = trigger.getBoundingClientRect();
@@ -2717,20 +3308,50 @@
           }
           menu.classList.remove('hidden');
           custom.classList.add('active');
+          wrapper.classList.add('has-open-dropdown');
+          wrapper.closest('.setting-item, .url-controls')?.classList.add('has-open-dropdown');
+          appContainer?.classList.add('has-open-dropdown');
         }
       });
 
       custom.querySelectorAll('.cyber-dropdown-item').forEach(item => {
+        const infoBtn = item.querySelector('.cyber-info-btn');
+        if (infoBtn) {
+          infoBtn.addEventListener('mouseenter', () => showCyberInfoPopover(infoBtn));
+          infoBtn.addEventListener('focus', () => showCyberInfoPopover(infoBtn));
+          infoBtn.addEventListener('mouseleave', () => {
+            if (!infoBtn.dataset.pinned) hideCyberInfoPopover();
+          });
+          infoBtn.addEventListener('blur', () => {
+            delete infoBtn.dataset.pinned;
+            hideCyberInfoPopover();
+          });
+          infoBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (_activeInfoBtn === infoBtn && infoBtn.dataset.pinned) {
+              delete infoBtn.dataset.pinned;
+              hideCyberInfoPopover();
+            } else {
+              custom.querySelectorAll('.cyber-info-btn').forEach(b => delete b.dataset.pinned);
+              infoBtn.dataset.pinned = 'true';
+              showCyberInfoPopover(infoBtn);
+            }
+          });
+        }
+
         item.addEventListener('click', (e) => {
           e.stopPropagation();
+          custom.querySelectorAll('.cyber-info-btn').forEach(b => delete b.dataset.pinned);
+          hideCyberInfoPopover();
           const val = item.dataset.value;
+          const lbl = item.querySelector('.cyber-dropdown-item-label');
           select.value = val;
           select.dispatchEvent(new Event('change'));
-          textSpan.textContent = item.textContent;
+          textSpan.textContent = lbl ? lbl.textContent : item.textContent;
           custom.querySelectorAll('.cyber-dropdown-item').forEach(i => i.classList.remove('selected'));
           item.classList.add('selected');
-          menu.classList.add('hidden');
-          custom.classList.remove('active');
+          _clearOpenDropdownClasses();
 
           if (select.id === 'format-select') {
             updateDynamicQualityOptions(val);
@@ -2743,9 +3364,12 @@
     fmtSelect?.addEventListener('change', () => updateDynamicQualityOptions(fmtSelect.value));
 
     document.addEventListener('click', () => {
-      document.querySelectorAll('.cyber-dropdown-menu').forEach(m => m.classList.add('hidden'));
-      document.querySelectorAll('.cyber-dropdown').forEach(d => d.classList.remove('active'));
+      document.querySelectorAll('.cyber-info-btn').forEach(b => delete b.dataset.pinned);
+      hideCyberInfoPopover();
+      _clearOpenDropdownClasses();
     });
+
+    window.addEventListener('scroll', hideCyberInfoPopover, { capture: true, passive: true });
   }
 
   // ─── BOOT ───
@@ -2816,6 +3440,7 @@
         if (textarea) textarea.value = '';
         const lang = window.CURRENT_LANG;
         showToast(`${result.count} ${lang === 'en' ? 'downloads added' : 'indirme eklendi'}`, 'success');
+        await refreshDownloads();
       } else {
         showToast(result?.error || 'Hata', 'error');
       }
@@ -2930,16 +3555,37 @@
       container.appendChild(div);
     }
 
-    let isDragging = false, startY, startScrollTop;
-    container.addEventListener('mousedown', e => { isDragging = true; startY = e.pageY; startScrollTop = container.scrollTop; container.style.cursor = 'grabbing'; });
-    window.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; container.style.cursor = 'grab'; snapDrum(); } });
-    window.addEventListener('mousemove', e => { if (!isDragging) return; e.preventDefault(); container.scrollTop = startScrollTop - (e.pageY - startY); });
+    let startY = 0, startScrollTop = 0, _dragRaf = 0, _lastPageY = 0;
+    function onDragMove(e) {
+      e.preventDefault();
+      _lastPageY = e.pageY;
+      if (!_dragRaf) {
+        _dragRaf = requestAnimationFrame(() => {
+          _dragRaf = 0;
+          container.scrollTop = startScrollTop - (_lastPageY - startY);
+        });
+      }
+    }
+    function onDragEnd() {
+      window.removeEventListener('mousemove', onDragMove);
+      window.removeEventListener('mouseup', onDragEnd);
+      if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = 0; }
+      container.style.cursor = 'grab';
+      snapDrum();
+    }
+    container.addEventListener('mousedown', e => {
+      startY = e.pageY;
+      startScrollTop = container.scrollTop;
+      container.style.cursor = 'grabbing';
+      window.addEventListener('mousemove', onDragMove);
+      window.addEventListener('mouseup', onDragEnd);
+    });
 
     let scrollTimeout;
     container.addEventListener('scroll', () => {
       clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(snapDrum, 120);
-    });
+    }, { passive: true });
 
     function snapDrum() {
       const idx = Math.round(container.scrollTop / 36);
@@ -3277,19 +3923,20 @@
           ? (lang === 'en' ? 'PC will shut down when all downloads finish. A 60-second countdown will appear. Continue?' : 'Tüm indirmeler bitince bilgisayar kapanacak. 60 saniyelik geri sayım başlayacak. Devam edilsin mi?')
           : (lang === 'en' ? 'PC will go to sleep when all downloads finish. Continue?' : 'Tüm indirmeler bitince bilgisayar uyku moduna alınacak. Devam edilsin mi?');
 
-        showConfirmModal(
-          lang === 'en' ? 'Confirm Auto-Action' : 'İşlemi Onayla',
+        customConfirm(
           confirmMsg,
-          async () => {
-            await callApi('set_auto_shutdown', mode);
-            closeModal();
-            const label = mode === 'shutdown'
-              ? (lang === 'en' ? '⚡ Shutdown on complete' : '⚡ Bitince kapat')
-              : (lang === 'en' ? '💤 Sleep on complete' : '💤 Bitince uyu');
-            showToast(label, 'warning');
-          },
-          lang === 'en' ? 'Confirm' : 'Onayla'
-        );
+          lang === 'en' ? 'Confirm Auto-Action' : 'İşlemi Onayla',
+          lang === 'en' ? 'Confirm' : 'Onayla',
+          false
+        ).then(async (ok) => {
+          if (!ok) return;
+          await callApi('set_auto_shutdown', mode);
+          closeModal();
+          const label = mode === 'shutdown'
+            ? (lang === 'en' ? '⚡ Shutdown on complete' : '⚡ Bitince kapat')
+            : (lang === 'en' ? '💤 Sleep on complete' : '💤 Bitince uyu');
+          showToast(label, 'warning');
+        });
       } else {
         await callApi('set_auto_shutdown', '');
         closeModal();
@@ -3379,16 +4026,17 @@
       playlistBar.style.display = _previewPlaylist.length > 1 ? 'flex' : 'none';
     }
 
+    const resolvedSrc = window.SuyliosBridge ? window.SuyliosBridge.convertPreviewSrc(item.url) : item.url;
     if (item.type === 'video' && videoEl) {
-      videoEl.src = item.url;
+      videoEl.src = resolvedSrc;
       videoEl.style.display = 'block';
       videoEl.play().catch(() => {});
     } else if (item.type === 'audio' && audioEl) {
-      audioEl.src = item.url;
+      audioEl.src = resolvedSrc;
       audioEl.style.display = 'block';
       audioEl.play().catch(() => {});
     } else if (imgEl) {
-      imgEl.src = item.url;
+      imgEl.src = resolvedSrc;
       imgEl.style.display = 'block';
     }
   }
@@ -3567,7 +4215,7 @@
     card.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      if (_dragSrc && _dragSrc !== card) {
+      if (_dragSrc && _dragSrc !== card && !card.classList.contains('drag-over')) {
         document.querySelectorAll('.download-card.drag-over').forEach(c => c.classList.remove('drag-over'));
         card.classList.add('drag-over');
       }

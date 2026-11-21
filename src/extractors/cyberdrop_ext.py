@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Optional
 
 from src.extractors.base_extractor import BaseExtractor, ExtractionError, ExtractionCancelled
@@ -38,6 +39,9 @@ CDL_SUPPORTED_DOMAINS = {
 class CyberdropDLExtractor(BaseExtractor):
     """Bulk async downloader wrapper for cyberdrop-dl CLI / library."""
 
+    _cdl_bin_cache: Optional[str] = None
+    _cdl_bin_lock = threading.Lock()
+
     def __init__(self) -> None:
         self._task_quality = "best"
         self._task_url = ""
@@ -54,21 +58,32 @@ class CyberdropDLExtractor(BaseExtractor):
                 return True
         return False
 
-    def _get_cdl_bin(self) -> str:
-        """Locate the cyberdrop-dl executable or fallback to python module."""
-        # First check virtual environment or path
-        cdl_exe = shutil.which("cyberdrop-dl")
-        if cdl_exe and os.path.exists(cdl_exe):
-            return cdl_exe
+    @classmethod
+    def _get_cdl_bin(cls) -> str:
+        """Locate the cyberdrop-dl executable or fallback to python module (cached)."""
+        if cls._cdl_bin_cache is not None:
+            return cls._cdl_bin_cache
 
-        # Check in the same directory as sys.executable
-        py_dir = os.path.dirname(sys.executable)
-        for name in ("cyberdrop-dl.exe", "cyberdrop-dl"):
-            candidate = os.path.join(py_dir, name)
-            if os.path.exists(candidate):
-                return candidate
+        with cls._cdl_bin_lock:
+            if cls._cdl_bin_cache is not None:
+                return cls._cdl_bin_cache
 
-        return ""
+            resolved = ""
+            # First check virtual environment or path
+            cdl_exe = shutil.which("cyberdrop-dl")
+            if cdl_exe and os.path.exists(cdl_exe):
+                resolved = cdl_exe
+            else:
+                # Check in the same directory as sys.executable
+                py_dir = os.path.dirname(sys.executable)
+                for name in ("cyberdrop-dl.exe", "cyberdrop-dl"):
+                    candidate = os.path.join(py_dir, name)
+                    if os.path.exists(candidate):
+                        resolved = candidate
+                        break
+
+            cls._cdl_bin_cache = resolved
+            return resolved
 
     def extract_info(self, url: str) -> dict[str, Any]:
         """Verify URL compatibility and provide metadata."""
@@ -114,7 +129,7 @@ class CyberdropDLExtractor(BaseExtractor):
             from src.config import _get_app_root
             cdl_appdata = str(_get_app_root() / "data" / "cdl_data")
         else:
-            cdl_appdata = os.path.join(os.path.expanduser("~"), ".suylios_cdl_data")
+            cdl_appdata = str(config.get_data_dir() / "cdl_data")
         os.makedirs(cdl_appdata, exist_ok=True)
 
         cdl_bin = self._get_cdl_bin()
@@ -153,6 +168,11 @@ class CyberdropDLExtractor(BaseExtractor):
         try:
             # cwd olarak output_path vermek Windows'ta klasörü kilitlediği (WinError 32) için temp dizini veriyoruz
             safe_cwd = tempfile.gettempdir()
+            cdl_env = os.environ.copy()
+            overlay_py = config.get_data_dir() / "runtime" / "python_overlay_active"
+            if overlay_py.is_dir():
+                existing_pp = cdl_env.get("PYTHONPATH", "")
+                cdl_env["PYTHONPATH"] = f"{overlay_py}{os.pathsep}{existing_pp}" if existing_pp else str(overlay_py)
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -161,8 +181,9 @@ class CyberdropDLExtractor(BaseExtractor):
                 encoding="utf-8",
                 errors="replace",
                 cwd=safe_cwd,
+                env=cdl_env,
             )
-            _uid = getattr(self, "_uid", "cdl") or "cdl"
+            _uid = kwargs.get("task_id") or getattr(self, "_uid", "cdl") or "cdl"
             _register_proc(_uid, process)
 
             files_before = set(os.listdir(output_path)) if os.path.exists(output_path) else set()

@@ -19,9 +19,16 @@ logger = logging.getLogger(__name__)
 def _patch_ytdlp_playlist_pagination() -> None:
     """Apply a runtime monkeypatch to yt-dlp to fix YouTube playlist pagination capping at 100 items.
 
-    YouTube recently changed continuation item schemas from 'continuationItemRenderer'
-    to 'continuationItemViewModel'. yt-dlp 2026.06.09 misses this token, stopping at 100.
+    Respects the remote kill-switch `runtime_patches.ytdlp_youtube_continuation_patch`
+    in the live Channel 2 hotfix manifest so it can be disabled remotely if upstream changes.
     """
+    try:
+        from src.engine.site_registry import site_registry
+        patches = site_registry.get_runtime_patches()
+        if patches.get("ytdlp_youtube_continuation_patch") is False:
+            return
+    except Exception:
+        pass
     try:
         import yt_dlp.utils
         import yt_dlp.extractor.youtube as y_ext

@@ -1,0 +1,221 @@
+{
+  "schema_version": 3,
+  "manifest_seq": 2026111701,
+  "published_at": "2026-11-17T01:00:00Z",
+  "min_app_version": "2.0.0",
+
+  "global_network": {
+    "chrome_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "wreq_impersonation": "chrome131",
+    "doh_endpoints": [
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/resolve",
+      "https://dns.quad9.net/dns-query"
+    ],
+    "default_blocklist": [
+      "tiktok.com",
+      "instagram.com",
+      "facebook.com",
+      "fb.watch",
+      "youtube.com",
+      "youtu.be",
+      "twitter.com",
+      "x.com"
+    ]
+  },
+
+  "pypi_pins": {
+    "yt-dlp": {
+      "enabled": true,
+      "max_version": null,
+      "blocked_versions": [],
+      "reason": ""
+    },
+    "gallery-dl": {
+      "enabled": true,
+      "max_version": null,
+      "blocked_versions": [],
+      "reason": ""
+    },
+    "cyberdrop-dl": {
+      "enabled": true,
+      "max_version": null,
+      "blocked_versions": [],
+      "reason": ""
+    },
+    "async-mega-py": {
+      "enabled": true,
+      "max_version": null,
+      "blocked_versions": [],
+      "reason": ""
+    }
+  },
+
+  "runtime_patches": {
+    "ytdlp_youtube_continuation_patch": true,
+    "ytdlp_yt_player_clients": ["ios", "android", "mweb", "web"],
+    "mega_vault_patch": true
+  },
+
+  "builtin_platforms": {
+    "youtube": { "name": "YouTube", "folder": "YouTube", "domains": ["youtube.com", "youtu.be"], "engine": "yt-dlp", "is_gallery": false },
+    "bunkr": { "name": "Bunkr", "folder": "Bunkr", "domains": ["bunkr.cr", "bunkr.lv", "bunkr.la", "bunkr.ws", "bunkr.red", "bunkr.si", "bunkr.fi", "bunkr.ph", "bunkr.ac", "bunkr.sk", "bunkr.black", "bunkr.site", "bunkr.cat", "bunkr.is", "bunkr.ru", "bunkr.su", "bunkrr.su", "bunkrr.ru", "balbums.st"], "engine": "bunkr", "is_gallery": true },
+    "gofile": { "name": "Gofile", "folder": "Gofile", "domains": ["gofile.io"], "engine": "gofile", "is_gallery": true },
+    "pixeldrain": { "name": "Pixeldrain", "folder": "Pixeldrain", "domains": ["pixeldrain.com", "pixeldrain.net", "pd.cybar.xyz"], "engine": "pixeldrain", "is_gallery": true },
+    "tiktok": { "name": "TikTok", "folder": "TikTok", "domains": ["tiktok.com"], "engine": "yt-dlp", "is_gallery": false },
+    "twitter": { "name": "Twitter / X", "folder": "Twitter", "domains": ["twitter.com", "x.com", "t.co"], "engine": "gallery-dl", "is_gallery": true },
+    "instagram": { "name": "Instagram", "folder": "Instagram", "domains": ["instagram.com"], "engine": "gallery-dl", "is_gallery": true },
+    "reddit": { "name": "Reddit", "folder": "Reddit", "domains": ["reddit.com", "redd.it", "i.redd.it", "v.redd.it"], "engine": "reddit", "is_gallery": true },
+    "pornhub": { "name": "Pornhub", "folder": "Pornhub", "domains": ["pornhub.com", "pornhubpremium.com"], "engine": "yt-dlp", "is_gallery": false },
+    "xvideos": { "name": "XVideos", "folder": "XVideos", "domains": ["xvideos.com", "xvideos.es", "xvideos.red"], "engine": "yt-dlp", "is_gallery": false },
+    "rule34": { "name": "Rule34", "folder": "Rule34", "domains": ["rule34.xxx", "rule34.xyz", "rule34.paheal.net", "rule34vault.com"], "engine": "gallery-dl", "is_gallery": true },
+    "hanime": { "name": "Hanime", "folder": "Hanime", "domains": ["hanime.tv", "hentai.tv"], "engine": "yt-dlp", "is_gallery": false },
+    "hitomi": { "name": "Hitomi", "folder": "Hitomi", "domains": ["hitomi.la"], "engine": "gallery-dl", "is_gallery": true },
+    "ehentai": { "name": "E-Hentai", "folder": "E-Hentai", "domains": ["e-hentai.org", "exhentai.org"], "engine": "gallery-dl", "is_gallery": true },
+    "twitch": { "name": "Twitch", "folder": "Twitch", "domains": ["twitch.tv", "clips.twitch.tv"], "engine": "yt-dlp", "is_gallery": false },
+    "vimeo": { "name": "Vimeo", "folder": "Vimeo", "domains": ["vimeo.com", "player.vimeo.com"], "engine": "yt-dlp", "is_gallery": false },
+    "soundcloud": { "name": "SoundCloud", "folder": "SoundCloud", "domains": ["soundcloud.com"], "engine": "yt-dlp", "is_gallery": false },
+    "dailymotion": { "name": "Dailymotion", "folder": "Dailymotion", "domains": ["dailymotion.com", "dai.ly"], "engine": "yt-dlp", "is_gallery": false },
+    "imgur": { "name": "Imgur", "folder": "Imgur", "domains": ["imgur.com", "i.imgur.com"], "engine": "gallery-dl", "is_gallery": true },
+    "flickr": { "name": "Flickr", "folder": "Flickr", "domains": ["flickr.com", "flic.kr"], "engine": "gallery-dl", "is_gallery": true },
+    "kemono": { "name": "Kemono", "folder": "Kemono", "domains": ["kemono.su", "kemono.cr", "kemono.party"], "engine": "gallery-dl", "is_gallery": true },
+    "coomer": { "name": "Coomer", "folder": "Coomer", "domains": ["coomer.su", "coomer.st", "coomer.party"], "engine": "gallery-dl", "is_gallery": true },
+    "erome": { "name": "Erome", "folder": "Erome", "domains": ["erome.com"], "engine": "gallery-dl", "is_gallery": true },
+    "xhamster": { "name": "xHamster", "folder": "xHamster", "domains": ["xhamster.com", "xhamster.desi", "xhamster2.com"], "engine": "yt-dlp", "is_gallery": false },
+    "cyberdrop": { "name": "Cyberdrop", "folder": "Cyberdrop", "domains": ["cyberdrop.me", "cyberdrop.cr", "cyberdrop.to", "cyberdrop.nl"], "engine": "cyberdrop-dl", "is_gallery": true },
+    "mega": { "name": "Mega", "folder": "Mega", "domains": ["mega.nz", "mega.co.nz"], "engine": "mega", "is_gallery": true },
+    "4chan": { "name": "4chan", "folder": "4chan", "domains": ["4chan.org", "boards.4chan.org", "boards.4channel.org"], "engine": "gallery-dl", "is_gallery": true },
+    "bluesky": { "name": "Bluesky", "folder": "Bluesky", "domains": ["bsky.app"], "engine": "gallery-dl", "is_gallery": true },
+    "simpcity": { "name": "SimpCity", "folder": "SimpCity", "domains": ["simpcity.cr", "simpcity.su", "simpcity.to", "simpcity.org"], "engine": "gallery-dl", "is_gallery": true },
+    "motherless": { "name": "Motherless", "folder": "Motherless", "domains": ["motherless.xxx", "motherless.com"], "engine": "gallery-dl", "is_gallery": true },
+    "goonbox": { "name": "Goonbox", "folder": "Goonbox", "domains": ["goonbox.cr", "goonbox.cc"], "engine": "gallery-dl", "is_gallery": true }
+  },
+
+  "sites": {
+    "bunkr": {
+      "folder": "Bunkr",
+      "domains": [
+        "bunkr.cr",
+        "bunkr.lv",
+        "bunkr.la",
+        "bunkr.ws",
+        "bunkr.red",
+        "bunkr.si",
+        "bunkr.fi",
+        "bunkr.ph",
+        "bunkr.ac",
+        "bunkr.sk",
+        "bunkr.black",
+        "bunkr.site",
+        "bunkr.cat",
+        "bunkr.is",
+        "bunkr.ru",
+        "bunkr.su",
+        "bunkrr.su",
+        "bunkrr.ru",
+        "balbums.st"
+      ],
+      "transport": {
+        "max_concurrent_files": 2,
+        "max_connections_per_file": 2,
+        "ipv4_only": true,
+        "impersonate": "chrome120",
+        "adaptive_min_bytes": 2097152,
+        "slow_switch_bps": 358400
+      },
+      "extract_rules": {
+        "album_selectors": [
+          "a[href*='/v/']",
+          "a[href*='/i/']",
+          "a[href*='/d/']",
+          "a[href*='/f/']",
+          ".grid-images a",
+          ".grid-images_box a",
+          "a.grid-images_box-link",
+          "a.image-container"
+        ],
+        "api_sign_paths": ["/api/_001_v2"],
+        "fallback_sign_url": "https://glb-apisign.cdn.cr/sign",
+        "js_cdn_regex": "var\\s+jsCDN\\s*=\\s*[\"']([^\"']+)[\"']"
+      },
+      "hotfix_override": null
+    },
+
+    "gofile": {
+      "folder": "Gofile",
+      "api_base": "https://api.gofile.io",
+      "web_base": "https://gofile.io",
+      "wt_config": {
+        "interval_secs": 14400,
+        "salt": "12af056dacea0b",
+        "fallback_salts": ["12af056dacea0b", "9844d94d963d30"],
+        "static_wt": "4fd6sg89d7s6",
+        "x_bl": "en-US",
+        "auto_discover_js_urls": [
+          "https://gofile.io/dist/js/config.js",
+          "https://gofile.io/dist/js/wt.obf.js"
+        ]
+      },
+      "transport": {
+        "max_concurrent_files": 3,
+        "slow_threshold_bps": 409600,
+        "slow_max_files": 1,
+        "slow_max_conns": 5,
+        "force_h2_on_redirect": true
+      },
+      "hotfix_override": null
+    },
+
+    "pixeldrain": {
+      "folder": "Pixeldrain",
+      "domains": ["pixeldrain.com", "pixeldrain.net", "pd.cybar.xyz"],
+      "api_path": "/api",
+      "transport": {
+        "max_concurrent_files": 2,
+        "max_connections_per_file": 8
+      },
+      "hotfix_override": null
+    },
+
+    "simpcity": {
+      "folder": "SimpCity",
+      "domains": ["simpcity.cr", "simpcity.su", "simpcity.to", "simpcity.org"],
+      "is_gallery": true,
+      "headers_template": {
+        "Referer": "{scheme}://{host}/",
+        "Origin": "{scheme}://{host}"
+      }
+    },
+
+    "goonbox": {
+      "folder": "Goonbox",
+      "domains": ["goonbox.cr", "goonbox.cc"],
+      "preserve_request_host": true
+    },
+
+    "motherless": {
+      "folder": "Motherless",
+      "domains": ["motherless.xxx", "motherless.com"],
+      "preserve_request_host": true
+    },
+
+    "video_hosts": {
+      "streamtape": {
+        "domains": ["streamtape.com", "streamtape.to", "streamtape.xyz", "streamta.pe", "shavem.pw"],
+        "link_regex": "document\\.getElementById\\(['\"](botlink|robotlink|ideoolink|norobotlink)['\"]\\)\\.innerHTML\\s*=\\s*['\"]([^'\"]*)['\"]\\s*\\+\\s*\\(['\"]([^'\"]+)['\"]\\)((?:\\.substring\\(\\d+\\))+)"
+      },
+      "doodstream": {
+        "domains": ["doodstream.com", "dood.to", "dood.so", "dood.la", "dood.ws", "d0000d.com", "d000d.com", "ds2play.com", "doods.pro"],
+        "pass_md5_regex": "(/pass_md5/[^?'\"\\s]+)"
+      },
+      "streamwish": {
+        "domains": ["streamwish.com", "streamwish.to", "filemoon.sx", "filemoon.to", "streamsb.com", "sbembed.com", "sbspeed.com"]
+      },
+      "voe": {
+        "domains": ["voe.sx", "voe-unblock.com", "launchtvy.com"]
+      }
+    }
+  },
+
+  "bundles": {}
+}

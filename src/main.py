@@ -31,8 +31,19 @@ if sys.platform.startswith("linux"):
     # Qt xcb platformunu zorunlu kıl (WebEngine için gerekli).
     if "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
-    # Wayland uyarılarını sustur
+    # NVIDIA/Wayland + XWayland üzerinde QtWebEngine (Chromium) GBM desteklemediğinde
+    # Vulkan'a düşüp "Compositor returned null texture" beyaz ekran flaşı ("pır pır")
+    # ve shader önbelleği çökmesine yol açabiliyor. GPU compositing/process devre dışı
+    # bırakılarak kararlı Skia yazılım tarayıcısı kullanılır (kullanıcı bayrağı varsa korunur).
+    _flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    if "--disable-gpu" not in _flags and "--enable-gpu" not in _flags:
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (f"{_flags} --disable-gpu").strip()
+    # Wayland uyarılarını sustur ve WebKit2GTK NVIDIA/GBM render siyah ekranını önle
+    # NOT: WEBKIT_DISABLE_DMABUF_RENDERER=1 GPU kompozitlemesini ve akıcı kaydırmayı
+    # tamamen kapattığı için (~35 FPS takılma) yerine SHM geri düşüşü kullanılır.
     os.environ.setdefault("QT_LOGGING_RULES", "*.warning=false")
+    if "WEBKIT_DISABLE_DMABUF_RENDERER" not in os.environ:
+        os.environ.setdefault("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1")
 
 # ---------------------------------------------------------------------------
 # Intercept -m for submodule execution (fixes gallery-dl/yt-dlp subprocesses)
@@ -135,14 +146,15 @@ def _setup_logging() -> Path | None:
         if portable_flag.exists() and not setup_flag.exists() and not in_program_files:
             # Portable: logs next to the exe
             log_root = exe_dir / "logs"
-        elif is_frozen:
-            # Installed: use LOCALAPPDATA/Programs/Suylios Downloader
-            local = os.environ.get("LOCALAPPDATA", "")
-            if local:
-                log_root = Path(local) / "Programs" / "Suylios Downloader" / "logs"
+        elif os.name == "nt":
+            local = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
+            log_root = Path(local) / "Programs" / "Suylios Downloader" / "logs"
+        elif sys.platform == "darwin":
+            log_root = Path.home() / "Library" / "Logs" / "Suylios Downloader"
         else:
-            # Development
-            log_root = Path(__file__).resolve().parent.parent / "logs"
+            # Linux: ana proje/uygulama klasörünü kirletmemek için XDG state/data dizinini kullan
+            xdg_state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+            log_root = Path(xdg_state) / "Suylios Downloader" / "logs"
     except Exception:
         pass
 
@@ -165,20 +177,22 @@ def _setup_logging() -> Path | None:
             fh.setLevel(logging.DEBUG)
             handlers.append(fh)
 
-            # Clean up logs older than 30 days
-            try:
-                import time as _time
-                cutoff = _time.time() - 30 * 86400
-                for day_folder in log_root.iterdir():
-                    if day_folder.is_dir():
-                        try:
-                            if day_folder.stat().st_mtime < cutoff:
-                                import shutil as _shutil
-                                _shutil.rmtree(str(day_folder), ignore_errors=True)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            # Clean up logs older than 30 days (non-blocking background thread)
+            def _cleanup_old_logs(root_dir: Path) -> None:
+                try:
+                    import time as _time
+                    import shutil as _shutil
+                    cutoff = _time.time() - 30 * 86400
+                    for day_folder in root_dir.iterdir():
+                        if day_folder.is_dir():
+                            try:
+                                if day_folder.stat().st_mtime < cutoff:
+                                    _shutil.rmtree(str(day_folder), ignore_errors=True)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            threading.Thread(target=_cleanup_old_logs, args=(log_root,), daemon=True).start()
         except Exception as _log_err:
             print(f"[UYARI] Log dosyası oluşturulamadı: {_log_err}")
 
@@ -187,6 +201,8 @@ def _setup_logging() -> Path | None:
         format=fmt,
         handlers=handlers,
     )
+    for _noisy in ("PIL", "urllib3", "charset_normalizer", "asyncio", "curl_cffi"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
     return log_file
 
 
@@ -199,9 +215,35 @@ logger = logging.getLogger("suylios")
 # ---------------------------------------------------------------------------
 
 APP_NAME = "Suylios Downloader"
-APP_VERSION = "1.4.3"
+APP_VERSION = "2.0.0"
 APP_GITHUB = "https://github.com/sayrias/suylios-downloader"
 SINGLE_INSTANCE_PORT = 58942
+
+_THEME_BG_COLORS: dict[str, str] = {
+    "suylios": "#0a0a0f",
+    "basit-beyaz": "#f8fafc",
+    "basit-koyu": "#121214",
+    "matrix": "#050f05",
+    "blood": "#120505",
+    "sunset": "#160812",
+}
+
+
+def _get_theme_bg_color(theme_id: Optional[str] = None) -> str:
+    """Return initial window/page background hex matching the configured theme."""
+    tid = str(theme_id or config.get("theme", "basit-beyaz") or "basit-beyaz").strip()
+    if tid in _THEME_BG_COLORS:
+        return _THEME_BG_COLORS[tid]
+    if tid.startswith("custom_"):
+        for custom in config.get("custom_themes", []) or []:
+            if isinstance(custom, dict) and custom.get("id") == tid:
+                colors = custom.get("colors") or {}
+                bg = colors.get("bgPrimary")
+                if isinstance(bg, str) and bg.startswith("#"):
+                    return bg
+                base = str(custom.get("base", "basit-beyaz"))
+                return _THEME_BG_COLORS.get(base, "#f8fafc")
+    return "#f8fafc"
 
 # ---------------------------------------------------------------------------
 # UI path resolution
@@ -263,6 +305,12 @@ class Bridge:
         self._tray_icon = None
         self._force_quit = False
         self._auto_shutdown_mode: str = ""  # "" | "shutdown" | "sleep"
+        self._clipboard_lock = threading.Lock()
+        self._latest_clipboard_text: str = ""
+        self._last_seen_clipboard: str = ""
+        self._last_auto_clipboard_url: str = ""
+        self._wl_watch_proc: Optional[subprocess.Popen] = None
+        self._wl_watch_active: bool = False
 
     def set_window(self, window: webview.Window) -> None:
         """Store a reference to the host window (called once at start)."""
@@ -390,6 +438,10 @@ class Bridge:
         d["sequential_download"] = bool(d.get("sequential_download", False))
         if d["sequential_download"]:
             d["concurrent_downloads"] = 1
+        seg_en, seg_conns, seg_mode = config.get_segmented_settings()
+        d["segmented_download"] = seg_en
+        d["segmented_connections"] = seg_conns
+        d["segmented_mode"] = seg_mode
         d["start_minimized"] = d.get("start_minimized", False)
         d["auto_start_windows"] = d.get("auto_start_windows", False)
         d["theme"] = d.get("theme", "basit-beyaz")
@@ -398,6 +450,7 @@ class Bridge:
     def save_settings(self, settings_json: str) -> dict[str, Any]:
         """Accept a JSON string of settings, merge, and persist."""
         try:
+            prev_auto = bool(config.get("clipboard_auto_download", False))
             incoming = json.loads(settings_json) if isinstance(settings_json, str) else settings_json
             key_map = {
                 "download_path": "download_dir",
@@ -405,10 +458,21 @@ class Bridge:
                 "concurrent_downloads": "max_concurrent",
             }
             for key, value in incoming.items():
+                if key == "segmented_connections":
+                    value = config.clamp_segmented_connections(value)
+                elif key == "segmented_mode":
+                    value = config.normalize_segmented_mode(value)
+                elif key == "segmented_download":
+                    value = bool(value)
                 mapped_key = key_map.get(key, key)
                 config.set(mapped_key, value)
                 config.set(key, value)
             config.save()
+            if not prev_auto and bool(config.get("clipboard_auto_download", False)):
+                cur_clip = (self.get_clipboard_text() or "").strip()
+                with self._clipboard_lock:
+                    if cur_clip:
+                        self._last_seen_clipboard = cur_clip
             if "concurrent_downloads" in incoming or "max_concurrent" in incoming:
                 new_conc = int(incoming.get("concurrent_downloads", incoming.get("max_concurrent", 3)))
                 self._dm.update_max_concurrent(new_conc)
@@ -440,6 +504,54 @@ class Bridge:
             winreg.CloseKey(key)
         except Exception as exc:
             logger.warning("Failed to set Windows autostart: %s", exc)
+
+    def set_window_background(self, theme_or_color: str) -> dict[str, Any]:
+        """Keep native Qt/WebEngine or GTK/WebKit2 surface background synced with active theme."""
+        try:
+            raw = str(theme_or_color or "").strip()
+            hex_color = raw if raw.startswith("#") else _get_theme_bg_color(raw)
+            win = self._window
+            native = getattr(win, "native", None) if win else None
+            trigger = getattr(native, "_suylios_bg_trigger", None)
+            if trigger is not None:
+                trigger.emit(hex_color)
+            elif sys.platform.startswith("linux") and win is not None:
+                try:
+                    import gi  # type: ignore
+                    gi.require_version("Gtk", "3.0")
+                    gi.require_version("WebKit2", "4.1")
+                    from gi.repository import Gdk, GLib, Gtk, WebKit2  # type: ignore
+
+                    def _find_wv(widget: Any) -> Any:
+                        if isinstance(widget, WebKit2.WebView):
+                            return widget
+                        if isinstance(widget, Gtk.Container):
+                            for child in widget.get_children():
+                                found = _find_wv(child)
+                                if found is not None:
+                                    return found
+                        return None
+
+                    def _apply_gtk_bg() -> bool:
+                        try:
+                            rgba = Gdk.RGBA()
+                            if rgba.parse(hex_color):
+                                if native is not None and isinstance(native, Gtk.Widget):
+                                    native.override_background_color(Gtk.StateFlags.NORMAL, rgba)
+                                wv = _find_wv(native) if native is not None else None
+                                if wv is not None:
+                                    wv.set_background_color(rgba)
+                        except Exception:
+                            pass
+                        return False
+
+                    GLib.idle_add(_apply_gtk_bg)
+                except Exception:
+                    pass
+            return {"ok": True, "color": hex_color}
+        except Exception as exc:
+            logger.debug("set_window_background skipped: %s", exc)
+            return {"ok": False}
 
     def reset_settings(self) -> dict[str, Any]:
         """Reset all configuration to default values."""
@@ -526,13 +638,7 @@ class Bridge:
                 out_path = dl_dir / f"{base_name}_converted_{counter}.{dst_ext}"
                 counter += 1
 
-            ffmpeg_path = config.get("ffmpeg_path", "")
-            if not ffmpeg_path or not Path(ffmpeg_path).is_file():
-                portable_ffmpeg = Path(__file__).resolve().parent.parent / "bin" / "ffmpeg.exe"
-                if portable_ffmpeg.is_file():
-                    ffmpeg_path = str(portable_ffmpeg)
-                else:
-                    ffmpeg_path = "ffmpeg"
+            ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
 
             cmd = [ffmpeg_path, "-y", "-i", str(src_path)]
 
@@ -620,8 +726,7 @@ class Bridge:
             
             out_file = tmp_dir / f"thumb_out_{uid}.jpg"
             
-            portable_ffmpeg = Path(__file__).resolve().parent.parent / "bin" / "ffmpeg.exe"
-            ffmpeg_path = str(portable_ffmpeg) if portable_ffmpeg.is_file() else config.get("ffmpeg_path", "ffmpeg")
+            ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
             
             cmd = [
                 ffmpeg_path,
@@ -669,15 +774,30 @@ class Bridge:
             logger.error("open_url failed: %s", exc)
             return {"ok": False, "error": str(exc)}
 
-    def get_clipboard_text(self) -> str:
-        """Read the current clipboard text (best-effort)."""
+    def get_last_auto_clipboard_url(self) -> str:
+        """Return the last URL automatically enqueued by the background clipboard watcher."""
+        with self._clipboard_lock:
+            return self._last_auto_clipboard_url
+
+    @staticmethod
+    def _is_valid_http_url(raw: str) -> bool:
+        if not raw or len(raw) > 4096 or any(ch.isspace() for ch in raw):
+            return False
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(raw)
+            return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+        except Exception:
+            return False
+
+    def _read_system_clipboard(self) -> str:
+        """Read the current OS clipboard text directly (works unfocused on Wayland/X11/Win/macOS)."""
         try:
             if sys.platform == "win32":
                 import ctypes
-                import time
                 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-                
+
                 # Fix for 64-bit pointers being truncated to 32-bit integers
                 user32.GetClipboardData.restype = ctypes.c_void_p
                 kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
@@ -711,14 +831,63 @@ class Bridge:
                     user32.CloseClipboard()
             elif sys.platform == "darwin":
                 result = subprocess.run(
-                    ["pbpaste"], capture_output=True, text=True, timeout=3
+                    ["pbpaste"], capture_output=True, text=True, timeout=2
                 )
                 return result.stdout if result.returncode == 0 else ""
             else:
-                for cmd in [["wl-paste"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]]:
+                import shutil
+                is_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+                # Wayland oturumunda XWayland (GDK_BACKEND=x11) Gtk.Clipboard odak dışı iken
+                # güncel panoyu alamaz; bu yüzden Wayland'da önce wl-paste kullanılır.
+                if is_wayland:
+                    if not hasattr(self, "_wl_paste_bin"):
+                        self._wl_paste_bin = shutil.which("wl-paste")
+                    if self._wl_paste_bin:
+                        try:
+                            result = subprocess.run(
+                                [self._wl_paste_bin, "--no-newline", "--type", "text/plain"],
+                                capture_output=True, text=True, timeout=0.6,
+                            )
+                            if result.returncode == 0:
+                                return result.stdout or ""
+                        except Exception:
+                            pass
+
+                if not is_wayland and "gi.repository.Gtk" in sys.modules:
+                    try:
+                        from gi.repository import Gdk, GLib, Gtk  # type: ignore
+
+                        done = threading.Event()
+                        holder: dict[str, str] = {"text": ""}
+
+                        def _read_gtk_clip() -> bool:
+                            try:
+                                cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                                txt = cb.wait_for_text()
+                                if txt:
+                                    holder["text"] = txt
+                            except Exception:
+                                pass
+                            done.set()
+                            return False
+
+                        GLib.idle_add(_read_gtk_clip)
+                        if done.wait(0.35):
+                            return holder["text"]
+                    except Exception:
+                        pass
+
+                if not hasattr(self, "_cached_clip_cmd"):
+                    candidates = (
+                        (["wl-paste", "--no-newline", "--type", "text/plain"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"])
+                        if is_wayland
+                        else (["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"], ["wl-paste", "--no-newline", "--type", "text/plain"])
+                    )
+                    self._cached_clip_cmd = next((c for c in candidates if shutil.which(c[0])), None)
+                if self._cached_clip_cmd:
                     try:
                         result = subprocess.run(
-                            cmd, capture_output=True, text=True, timeout=3
+                            self._cached_clip_cmd, capture_output=True, text=True, timeout=0.6
                         )
                         if result.returncode == 0 and result.stdout:
                             return result.stdout
@@ -728,6 +897,91 @@ class Bridge:
         except Exception as exc:
             logger.debug("Clipboard read error: %s", exc)
             return ""
+
+    def get_clipboard_text(self) -> str:
+        """Read the current clipboard text (uses live Wayland cache when watcher is active)."""
+        with self._clipboard_lock:
+            if self._wl_watch_active:
+                return self._latest_clipboard_text
+        text = self._read_system_clipboard()
+        with self._clipboard_lock:
+            self._latest_clipboard_text = text
+        return text
+
+    def _handle_clipboard_text(self, raw_text: str, *, initial: bool = False) -> None:
+        """Process a clipboard update and trigger background auto-download immediately when enabled."""
+        cleaned = (raw_text or "").strip()
+        with self._clipboard_lock:
+            self._latest_clipboard_text = raw_text or ""
+            if initial:
+                self._last_seen_clipboard = cleaned
+                return
+            if cleaned == self._last_seen_clipboard:
+                return
+            self._last_seen_clipboard = cleaned
+
+        if not cleaned:
+            return
+        if not config.get("clipboard_monitor", True) or not config.get("clipboard_auto_download", False):
+            return
+        if not self._is_valid_http_url(cleaned):
+            return
+
+        # Skip if already actively queued/downloading
+        try:
+            for t in self._dm.get_all_tasks():
+                if t.get("url") == cleaned and t.get("status") in ("downloading", "queued", "converting", "merging"):
+                    with self._clipboard_lock:
+                        self._last_auto_clipboard_url = cleaned
+                    return
+        except Exception:
+            pass
+
+        with self._clipboard_lock:
+            self._last_auto_clipboard_url = cleaned
+
+        fmt = str(config.get("default_format", "auto") or "auto")
+        qual = str(config.get("default_quality", "best") or "best")
+        embed_meta = bool(config.get("embed_metadata", True))
+        dl_subs = bool(config.get("download_subtitles", False))
+        compress_arch = bool(config.get("auto_compress", False))
+        compress_fmt = str(config.get("compress_format", "zip") or "zip")
+
+        res = self.add_download(
+            url=cleaned,
+            format_type=fmt,
+            quality=qual,
+            embed_metadata=embed_meta,
+            download_subtitles=dl_subs,
+            compress_archive=compress_arch,
+            compress_format=compress_fmt,
+        )
+        if not res.get("ok"):
+            return
+
+        logger.info("Background auto-download started from clipboard: %s", cleaned)
+
+        def _notify_async() -> None:
+            try:
+                if self._window:
+                    self._window.evaluate_js(
+                        f"window._onAutoDownloadAdded && window._onAutoDownloadAdded({json.dumps(cleaned)})"
+                    )
+            except Exception:
+                pass
+            try:
+                lang = str(config.get("language", "tr") or "tr")
+                short_url = cleaned if len(cleaned) <= 72 else cleaned[:69] + "..."
+                msg = (
+                    f"Auto-download started: {short_url}"
+                    if lang == "en"
+                    else f"Anında indirme başlatıldı: {short_url}"
+                )
+                self.show_desktop_notification("Suylios Downloader", msg)
+            except Exception:
+                pass
+
+        threading.Thread(target=_notify_async, daemon=True, name="clip-notify").start()
 
     def pick_folder(self) -> str:
         """Open a native folder-picker dialog and return the chosen path."""
@@ -790,6 +1044,33 @@ class Bridge:
                         return geom.x(), geom.y(), geom.width(), geom.height()
             except Exception:
                 pass
+            # GTK / GDK ekranından çalışma alanını süreç içi oku
+            if "gi.repository.Gdk" in sys.modules:
+                try:
+                    from gi.repository import Gdk, GLib  # type: ignore
+
+                    done = threading.Event()
+                    area: list[tuple[int, int, int, int]] = []
+
+                    def _read_gdk_area() -> bool:
+                        try:
+                            disp = Gdk.Display.get_default()
+                            mon = disp.get_primary_monitor() if disp else None
+                            if mon is None and disp and disp.get_n_monitors() > 0:
+                                mon = disp.get_monitor(0)
+                            if mon is not None:
+                                wa = mon.get_workarea()
+                                area.append((wa.x, wa.y, wa.width, wa.height))
+                        except Exception:
+                            pass
+                        done.set()
+                        return False
+
+                    GLib.idle_add(_read_gdk_area)
+                    if done.wait(0.35) and area:
+                        return area[0]
+                except Exception:
+                    pass
             # xrandr fallback
             try:
                 import subprocess, re
@@ -891,17 +1172,28 @@ class Bridge:
         }
 
     def get_supported_sites(self) -> list[dict[str, Any]]:
-        """Return full list of supported sites from SUPPORTED_SITES.json."""
+        """Return full list of supported sites from SiteRegistry (SUPPORTED_SITES.json + live delta)."""
+        try:
+            from src.engine.site_registry import site_registry
+            merged = site_registry.get_supported_sites()
+            if merged:
+                return merged
+        except Exception as exc:
+            logger.debug("SiteRegistry get_supported_sites fallback: %s", exc)
         try:
             candidates = [
+                Path(__file__).resolve().parent.parent / "hotfixes" / "SUPPORTED_SITES.json",
+                Path(_resolve_ui_path()).parent.parent.parent / "hotfixes" / "SUPPORTED_SITES.json",
                 Path(_resolve_ui_path()).parent / "SUPPORTED_SITES.json",
                 Path(_resolve_ui_path()).parent.parent / "SUPPORTED_SITES.json",
                 Path(_resolve_ui_path()).parent.parent.parent / "SUPPORTED_SITES.json",
                 Path(__file__).resolve().parent.parent / "SUPPORTED_SITES.json",
+                Path(sys.executable).parent / "hotfixes" / "SUPPORTED_SITES.json",
                 Path(sys.executable).parent / "SUPPORTED_SITES.json",
                 Path(sys.executable).parent / "_internal" / "SUPPORTED_SITES.json",
             ]
             if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                candidates.insert(0, Path(sys._MEIPASS) / "hotfixes" / "SUPPORTED_SITES.json")
                 candidates.insert(0, Path(sys._MEIPASS) / "SUPPORTED_SITES.json")
                 candidates.insert(0, Path(sys._MEIPASS).parent / "SUPPORTED_SITES.json")
 
@@ -1155,7 +1447,17 @@ class Bridge:
             return {"ok": False, "error": str(exc)}
 
     def check_for_updates(self) -> dict[str, Any]:
-        """Check latest release on GitHub API."""
+        """Check latest release on GitHub API (with true SemVer) and sync Channel 2 hotfixes."""
+        try:
+            from src.engine.site_registry import parse_semver
+            from src.engine.smart_updater import smart_updater
+            # Arka planda Kanal 2 (Zero-Release Hotfix) beslemesini sessizce senkronize et
+            threading.Thread(target=smart_updater.sync_hotfix_channel, daemon=True).start()
+        except Exception:
+            def parse_semver(v: str) -> tuple[int, int, int, int]:
+                parts = [int(x) if x.isdigit() else 0 for x in v.strip().lstrip("vV").split(".")[:4]]
+                return (parts + [0, 0, 0, 0])[:4]  # type: ignore[return-value]
+
         try:
             import urllib.request
             req = urllib.request.Request(
@@ -1164,11 +1466,14 @@ class Bridge:
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                tag = data.get("tag_name", "").lstrip("v")
-                current = APP_VERSION.lstrip("v")
+                tag = data.get("tag_name", "").lstrip("vV")
+                current = APP_VERSION.lstrip("vV")
                 download_url = ""
                 for asset in data.get("assets", []):
                     name = asset.get("name", "")
+                    if sys.platform.startswith("linux") and (name.endswith(".AppImage") or "Linux" in name):
+                        download_url = asset.get("browser_download_url", "")
+                        break
                     if name.endswith(".zip") and "Portable" in name:
                         download_url = asset.get("browser_download_url", "")
                         break
@@ -1180,13 +1485,54 @@ class Bridge:
                             break
                 return {
                     "ok": True,
-                    "has_update": tag != current and tag > current,
+                    "has_update": bool(tag) and parse_semver(tag) > parse_semver(current),
                     "latest_version": tag,
                     "download_url": download_url or data.get("html_url", ""),
                     "release_notes": data.get("body", "")
                 }
         except Exception as exc:
             logger.warning("Update check error: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+    def get_update_center_status(self) -> dict[str, Any]:
+        """Return 3-Channel Smart Updater status (App Core, Hotfix Manifest, PyPI Engines, Rust Engine)."""
+        try:
+            from src.engine.smart_updater import smart_updater
+            return smart_updater.get_update_center_status(APP_VERSION)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def sync_hotfix_updates(self) -> dict[str, Any]:
+        """Channel 2: Sync Zero-Release Ed25519 Hotfix Feed immediately without restarting."""
+        try:
+            from src.engine.smart_updater import smart_updater
+            return smart_updater.sync_hotfix_channel()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def check_all_updates(self) -> dict[str, Any]:
+        """Check all 3 channels (App Release + Ed25519 Hotfix Feed + PyPI Engine Wheels)."""
+        try:
+            from src.engine.smart_updater import smart_updater
+            return smart_updater.check_all_channels(APP_VERSION)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def update_pypi_engines(self, packages: Any = None) -> dict[str, Any]:
+        """Channel 3: Update yt-dlp / gallery-dl / cyberdrop-dl / async-mega-py via atomic wheel overlay."""
+        try:
+            from src.engine.smart_updater import smart_updater
+            pkg_list = packages if isinstance(packages, list) else None
+            return smart_updater.update_pypi_engines(pkg_list)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def rollback_pypi_engines(self) -> dict[str, Any]:
+        """Roll back Channel 3 Python wheel overlay to the previous working snapshot."""
+        try:
+            from src.engine.smart_updater import smart_updater
+            return smart_updater.rollback_engines()
+        except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     def perform_update(self, download_url: str) -> dict[str, Any]:
@@ -1354,7 +1700,18 @@ del "%~f0" >nul 2>&1
 
     def shutdown(self) -> None:
         """Called on window close to release resources."""
+        if getattr(self, "_is_shutdown", False):
+            return
+        self._is_shutdown = True
         try:
+            proc = getattr(self, "_wl_watch_proc", None)
+            if proc is not None:
+                self._wl_watch_active = False
+                self._wl_watch_proc = None
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
             if hasattr(self, "_tray_icon") and self._tray_icon:
                 try:
                     self._tray_icon.visible = False
@@ -1451,6 +1808,92 @@ def _scheduler_and_shutdown_loop(bridge) -> None:
         time.sleep(5)
 
 
+def _clipboard_watcher_loop(bridge: Bridge) -> None:
+    """Background daemon loop that reacts immediately to clipboard URLs even when hidden/unfocused."""
+    import shutil
+
+    def _stopped() -> bool:
+        return bool(bridge._force_quit or getattr(bridge, "_is_shutdown", False))
+
+    # Linux Wayland: event-driven wl-paste --watch (0% idle CPU, works without XWayland focus)
+    if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY"):
+        wl_paste = shutil.which("wl-paste")
+        if wl_paste:
+            failures = 0
+            seeded = False
+            while not _stopped() and failures < 3:
+                proc = None
+                try:
+                    proc = subprocess.Popen(
+                        [wl_paste, "--type", "text/plain", "--watch", "sh", "-c", 'cat; printf "\\000"'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    with bridge._clipboard_lock:
+                        bridge._wl_watch_proc = proc
+                        bridge._wl_watch_active = True
+
+                    fd = proc.stdout.fileno() if proc.stdout else -1
+                    buf = bytearray()
+                    MAX_ENTRY = 16384
+                    while fd >= 0 and not _stopped():
+                        chunk = os.read(fd, 4096)
+                        if not chunk:
+                            break
+                        start = 0
+                        while True:
+                            nul_idx = chunk.find(b"\x00", start)
+                            if nul_idx == -1:
+                                rem = chunk[start:]
+                                if len(buf) < MAX_ENTRY:
+                                    buf.extend(rem[: MAX_ENTRY - len(buf)])
+                                break
+                            seg = chunk[start:nul_idx]
+                            if len(buf) < MAX_ENTRY:
+                                buf.extend(seg[: MAX_ENTRY - len(buf)])
+                            text = buf.decode("utf-8", errors="replace")
+                            buf.clear()
+                            is_initial = not seeded
+                            seeded = True
+                            bridge._handle_clipboard_text(text, initial=is_initial)
+                            start = nul_idx + 1
+                    failures += 1
+                except Exception as exc:
+                    failures += 1
+                    logger.debug("Wayland clipboard watcher error: %s", exc)
+                finally:
+                    with bridge._clipboard_lock:
+                        bridge._wl_watch_active = False
+                        if bridge._wl_watch_proc is proc:
+                            bridge._wl_watch_proc = None
+                    if proc is not None:
+                        try:
+                            proc.terminate()
+                            proc.wait(timeout=1)
+                        except Exception:
+                            pass
+                if not _stopped() and failures < 3:
+                    time.sleep(1.0)
+            if _stopped():
+                return
+
+    # Cross-platform fallback (Windows, macOS, Linux X11, or Wayland without wl-paste)
+    try:
+        initial_text = bridge._read_system_clipboard()
+        bridge._handle_clipboard_text(initial_text, initial=True)
+    except Exception:
+        pass
+
+    while not _stopped():
+        try:
+            if config.get("clipboard_monitor", True) and config.get("clipboard_auto_download", False):
+                txt = bridge._read_system_clipboard()
+                bridge._handle_clipboard_text(txt, initial=False)
+        except Exception as exc:
+            logger.debug("Clipboard watcher poll error: %s", exc)
+        time.sleep(0.85)
+
+
 def _ensure_single_instance(bridge_holder: Optional[Any] = None) -> None:
     import socket
     if bridge_holder is None:
@@ -1483,10 +1926,11 @@ def _ensure_single_instance(bridge_holder: Optional[Any] = None) -> None:
                     data = conn.recv(1024)
                     conn.close()
                     if b"RESTORE" in data:
-                        if hasattr(bridge_holder, "window") and bridge_holder.window:
+                        win_obj = getattr(bridge_holder, "_window", None) or getattr(bridge_holder, "window", None)
+                        if win_obj:
                             try:
-                                bridge_holder.window.show()
-                                bridge_holder.window.restore()
+                                win_obj.show()
+                                win_obj.restore()
                             except Exception:
                                 pass
                         if hasattr(bridge_holder, "show_from_tray"):
@@ -1602,15 +2046,73 @@ def _ensure_pywebview_webchannel() -> None:
 
 
         qt_platform.BrowserView._set_js_api = patched_set_js_api
+
+        # QWebEnginePage varsayılanı #ffffff (beyaz) gelir; yeniden çizim veya başlangıçta
+        # beyaz flaş ("pır pır") oluşmaması için pencere + WebEnginePage arka planını eşle.
+        if not getattr(qt_platform.BrowserView.__init__, "_suylios_bg_patched", False):
+            _orig_bv_init = qt_platform.BrowserView.__init__
+
+            def _patched_bv_init(self, window_obj):
+                _orig_bv_init(self, window_obj)
+                try:
+                    from qtpy import QtCore as _QtCore
+                    from qtpy.QtGui import QColor as _QColor
+
+                    class _BgSync(_QtCore.QObject):
+                        apply_bg = _QtCore.Signal(str)
+
+                    sync = _BgSync(self)
+
+                    def _apply_bg_slot(hex_col: str) -> None:
+                        col = _QColor(hex_col)
+                        if not col.isValid():
+                            return
+                        pal = self.palette()
+                        pal.setColor(self.backgroundRole(), col)
+                        self.setPalette(pal)
+                        wv = getattr(self, "webview", None)
+                        if wv is not None:
+                            try:
+                                wv.page().setBackgroundColor(col)
+                            except Exception:
+                                pass
+
+                    sync.apply_bg.connect(_apply_bg_slot)
+                    self._suylios_bg_sync = sync
+                    self._suylios_bg_trigger = sync.apply_bg
+                    _apply_bg_slot(self.background_color.name() if hasattr(self, "background_color") else _get_theme_bg_color())
+                except Exception as bg_exc:
+                    logger.debug("BrowserView background sync skipped: %s", bg_exc)
+
+            _patched_bv_init._suylios_bg_patched = True  # type: ignore[attr-defined]
+            qt_platform.BrowserView.__init__ = _patched_bv_init
+
         logger.info("Applied pywebview QtWebChannel runtime patch for Linux.")
     except Exception as exc:
         logger.debug("Could not apply pywebview QtWebChannel patch: %s", exc)
 
 
+def _linux_has_qt_webengine() -> bool:
+    """Return True if Qt + QtWebEngine Python bindings are installed cleanly."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import importlib.util
+        return (
+            importlib.util.find_spec("PyQt6") is not None
+            and importlib.util.find_spec("qtpy") is not None
+            and importlib.util.find_spec("PyQt6.QtWebEngineWidgets") is not None
+        )
+    except Exception:
+        return False
+
+
 def main() -> None:
     """Launch the Suylios Downloader application."""
     _ensure_single_instance(bridge_holder=None)
-    _ensure_pywebview_webchannel()
+    use_qt_on_linux = _linux_has_qt_webengine()
+    if use_qt_on_linux:
+        _ensure_pywebview_webchannel()
     logger.info("%s v%s starting …", APP_NAME, APP_VERSION)
     logger.info("Portable mode: %s", config.is_portable())
     logger.info("Download directory: %s", config.get_download_dir())
@@ -1625,6 +2127,10 @@ def main() -> None:
     # Start scheduler / auto-shutdown background loop
     sched_thread = threading.Thread(target=_scheduler_and_shutdown_loop, args=(bridge,), daemon=True, name="scheduler")
     sched_thread.start()
+
+    # Start background clipboard watcher (handles Anında İndir even when hidden/unfocused)
+    clip_thread = threading.Thread(target=_clipboard_watcher_loop, args=(bridge,), daemon=True, name="clipboard-watcher")
+    clip_thread.start()
 
     # Start system tray icon (background thread)
     tray_thread = threading.Thread(target=_create_tray_icon, args=(bridge,), daemon=True, name="tray")
@@ -1649,6 +2155,8 @@ def main() -> None:
         frameless=True,
         easy_drag=False,
         text_select=False,
+        zoomable=True,
+        background_color=_get_theme_bg_color(),
         hidden=config.get("start_minimized", False),
     )
     bridge.set_window(window)
@@ -1709,7 +2217,20 @@ def main() -> None:
 
     window.events.closing += _on_closing  # type: ignore[attr-defined]
 
-    webview.start(debug=("--debug" in sys.argv))
+    storage_dir = config.get_data_dir() / "webview"
+    try:
+        storage_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    start_kwargs: dict[str, Any] = {
+        "debug": ("--debug" in sys.argv),
+        "private_mode": False,
+        "storage_path": str(storage_dir),
+    }
+    if sys.platform.startswith("linux") and not use_qt_on_linux:
+        start_kwargs["gui"] = "gtk"
+    webview.start(**start_kwargs)
     try:
         bridge.shutdown()
     except Exception:

@@ -32,14 +32,21 @@ class _DummyResponse:
 
 
 class MotherlessBaseExtractor(BaseExtractor):
+    def __init__(self, match):
+        BaseExtractor.__init__(self, match)
+        parsed = urllib.parse.urlparse(self.url)
+        host = (parsed.netloc or "motherless.xxx").removeprefix("www.")
+        self.base_root = f"https://{host}"
+
     def request(self, url: str, **kwargs):
+        ref = f"{getattr(self, 'base_root', 'https://motherless.xxx')}/"
         try:
             from curl_cffi import requests as c_requests
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
-                "Referer": "https://motherless.xxx/",
+                "Referer": ref,
             }
             r = c_requests.get(url, headers=headers, timeout=15, verify=False, impersonate="chrome124")
             return _DummyResponse(r.text, r.status_code)
@@ -58,7 +65,7 @@ class MotherlessBaseExtractor(BaseExtractor):
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5",
-                    "Referer": "https://motherless.xxx/",
+                    "Referer": ref,
                 }
                 r = requests.get(url, headers=headers, timeout=20, verify=False)
                 return _DummyResponse(r.text, r.status_code)
@@ -81,7 +88,7 @@ class MotherlessCustomMediaExtractor(MotherlessBaseExtractor):
         self.media_id = match.group(1).upper()
 
     def items(self):
-        url = f"https://motherless.xxx/{self.media_id}"
+        url = f"{self.base_root}/{self.media_id}"
         self.log.debug("Fetching motherless media page: %s", url)
         try:
             response = self.request(url)
@@ -115,7 +122,7 @@ class MotherlessCustomMediaExtractor(MotherlessBaseExtractor):
         if file_url.startswith("//"):
             file_url = "https:" + file_url
         elif file_url.startswith("/"):
-            file_url = "https://motherless.xxx" + file_url
+            file_url = self.base_root + file_url
 
         title = self.media_id
         m_title = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
@@ -139,7 +146,7 @@ class MotherlessCustomMediaExtractor(MotherlessBaseExtractor):
             "extension": ext,
             "_filename": f"{self.media_id} {title}.{ext}",
             "_http_headers": {
-                "Referer": "https://motherless.xxx/",
+                "Referer": f"{self.base_root}/",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             },
         }

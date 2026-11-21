@@ -23,11 +23,15 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
     "download_dir": "",          # resolved at runtime
     "max_concurrent": 3,
     "speed_limit": 0,            # 0 = unlimited, otherwise bytes/sec
+    "segmented_download": True,  # enable multi-connection HTTP Range download
+    "segmented_connections": 8,  # maximum parallel connections per file (2..32)
+    "segmented_mode": "adaptive",  # adaptive | large (>= 5 MB) | always (>= 1 MB) | turbo (all >= 512 KB, max parts)
     "default_format": "auto",    # auto | mp3 | mp4 | audio
     "default_quality": "best",   # best | 1080 | 720 | 480 | 360
     "mp3_bitrate": "320",        # kbps
     "proxy": "",
     "clipboard_monitor": True,
+    "clipboard_auto_download": False,
     "create_subfolders": True,
     "language": "tr",
     "start_minimized": False,
@@ -60,6 +64,23 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
         "hanime": {"folder": "Hanime", "quality": "best", "cookies": ""},
         "hitomi": {"folder": "Hitomi", "quality": "best", "cookies": ""},
         "ehentai": {"folder": "E-Hentai", "quality": "best", "cookies": ""},
+        "twitch": {"folder": "Twitch", "quality": "best", "cookies": ""},
+        "vimeo": {"folder": "Vimeo", "quality": "best", "cookies": ""},
+        "soundcloud": {"folder": "SoundCloud", "quality": "best", "cookies": ""},
+        "dailymotion": {"folder": "Dailymotion", "quality": "best", "cookies": ""},
+        "imgur": {"folder": "Imgur", "quality": "best", "cookies": ""},
+        "flickr": {"folder": "Flickr", "quality": "best", "cookies": ""},
+        "kemono": {"folder": "Kemono", "quality": "best", "cookies": ""},
+        "coomer": {"folder": "Coomer", "quality": "best", "cookies": ""},
+        "erome": {"folder": "Erome", "quality": "best", "cookies": ""},
+        "xhamster": {"folder": "xHamster", "quality": "best", "cookies": ""},
+        "cyberdrop": {"folder": "Cyberdrop", "quality": "best", "cookies": ""},
+        "mega": {"folder": "Mega", "quality": "best", "cookies": ""},
+        "4chan": {"folder": "4chan", "quality": "best", "cookies": ""},
+        "bluesky": {"folder": "Bluesky", "quality": "best", "cookies": ""},
+        "simpcity": {"folder": "SimpCity", "quality": "best", "cookies": ""},
+        "motherless": {"folder": "Motherless", "quality": "best", "cookies": ""},
+        "goonbox": {"folder": "Goonbox", "quality": "best", "cookies": ""},
         "other": {"folder": "Others", "quality": "best", "cookies": ""},
     },
     "blocklist": [
@@ -84,7 +105,7 @@ def _get_app_root() -> Path:
 
 
 def _is_portable() -> bool:
-    """Detect if running as portable package vs installed setup/onefile."""
+    """Detect if running as an explicit portable package vs standard install/dev."""
     root = _get_app_root()
     # If setup flag exists or in Program Files, it's definitely NOT portable
     if (root / "installed_by_setup.flag").exists() or "program files" in str(root).lower():
@@ -96,10 +117,43 @@ def _is_portable() -> bool:
                 return False
         except Exception:
             pass
-    # If portable flag exists, or portable data folder exists next to exe, or during dev
-    if (root / "portable.flag").exists() or (root / "data").is_dir() or not getattr(sys, "frozen", False):
-        return True
-    return False
+    # Only activate portable mode when portable.flag is explicitly present next to the app
+    return (root / "portable.flag").exists()
+
+
+def _get_user_data_root() -> Path:
+    """Return the OS-standard per-user data folder for non-portable runs."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(base) / "Suylios Downloader"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Suylios Downloader"
+    xdg_data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg_data) / "Suylios Downloader"
+
+
+def _get_user_downloads_base() -> Path:
+    """Resolve the user's Downloads folder cleanly (honoring Linux XDG user-dirs)."""
+    if sys.platform.startswith("linux"):
+        xdg_dl = os.environ.get("XDG_DOWNLOAD_DIR")
+        if xdg_dl:
+            p = Path(os.path.expanduser(xdg_dl))
+            if p.is_dir():
+                return p
+        user_dirs = Path.home() / ".config" / "user-dirs.dirs"
+        if user_dirs.is_file():
+            try:
+                for line in user_dirs.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = line.strip()
+                    if line.startswith("XDG_DOWNLOAD_DIR="):
+                        raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        raw = raw.replace("$HOME", str(Path.home()))
+                        cand = Path(os.path.expanduser(raw))
+                        if cand.is_dir():
+                            return cand
+            except Exception:
+                pass
+    return Path.home() / "Downloads"
 
 
 def _default_download_dir() -> str:
@@ -108,7 +162,7 @@ def _default_download_dir() -> str:
         dl_dir = _get_app_root() / "Downloads"
         dl_dir.mkdir(parents=True, exist_ok=True)
         return str(dl_dir)
-    dl_dir = Path.home() / "Downloads" / "Suylios Downloads"
+    dl_dir = _get_user_downloads_base() / "Suylios Downloads"
     dl_dir.mkdir(parents=True, exist_ok=True)
     return str(dl_dir)
 
@@ -136,14 +190,13 @@ def _get_appdata_dir() -> Path:
                             pass
         return data_dir
 
-    roaming = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA") or str(Path.home())
-    cfg_dir = Path(roaming) / "Suylios Downloader"
+    cfg_dir = _get_user_data_root()
     cfg_dir.mkdir(parents=True, exist_ok=True)
 
     legacy_paths = [
+        _get_app_root() / "data",
         Path(os.environ.get("LOCALAPPDATA", "")) / "SuyliosDownloader",
         Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Suylios Downloader" / "data",
-        _get_app_root() / "data",
     ]
     for fname in ("config.json", "history.json"):
         target_file = cfg_dir / fname
@@ -309,14 +362,52 @@ class Config:
 
     def get_download_dir(self) -> str:
         """Return the current download directory, creating it if needed."""
-        dl_dir = self.get("download_dir", _default_download_dir())
+        dl_dir = self.get("download_dir", "")
         default_dl = _default_download_dir()
-        if not dl_dir or dl_dir.endswith("Downloads") or dl_dir.endswith("Suylios") or "Downloader" in dl_dir:
+        in_app_root = False
+        if dl_dir and not _is_portable():
+            try:
+                dl_res = Path(dl_dir).expanduser().resolve()
+                app_root_dl = (_get_app_root() / "Downloads").resolve()
+                in_app_root = (
+                    dl_res == app_root_dl
+                    or (dl_res.name == "Downloads" and dl_res.parent.name in ("Downloader", _get_app_root().name))
+                )
+            except Exception:
+                in_app_root = dl_dir.rstrip("/\\").endswith("Downloader/Downloads")
+        if not dl_dir or in_app_root or dl_dir.endswith("Suylios"):
             if dl_dir != default_dl:
                 dl_dir = default_dl
                 self.set("download_dir", dl_dir)
+                self.save()
         Path(dl_dir).mkdir(parents=True, exist_ok=True)
         return dl_dir
+
+    @staticmethod
+    def clamp_segmented_connections(value: Any, default: int = 8) -> int:
+        """Clamp configured maximum segmented connections to ``[2, 32]``."""
+        try:
+            conns = int(value)
+        except (TypeError, ValueError):
+            conns = default
+        return max(2, min(32, conns))
+
+    @staticmethod
+    def normalize_segmented_mode(value: Any) -> str:
+        """Normalize segmented download mode to ``adaptive``, ``large``, ``always``, or ``turbo``."""
+        mode = str(value or "adaptive").strip().lower()
+        if mode in ("aggressive", "idm"):
+            return "turbo"
+        if mode not in ("adaptive", "large", "always", "turbo"):
+            return "adaptive"
+        return mode
+
+    def get_segmented_settings(self) -> tuple[bool, int, str]:
+        """Return ``(enabled, max_connections, mode)`` clamped to safe bounds."""
+        enabled = bool(self.get("segmented_download", True))
+        conns = self.clamp_segmented_connections(self.get("segmented_connections", 8))
+        mode = self.normalize_segmented_mode(self.get("segmented_mode", "adaptive"))
+        return enabled, conns, mode
 
     @staticmethod
     def is_portable() -> bool:
@@ -328,12 +419,22 @@ class Config:
         """Return the application root directory."""
         return _get_app_root()
 
+    @staticmethod
+    def get_data_dir() -> Path:
+        """Return the active persistent user data directory."""
+        return _get_appdata_dir()
+
     def get_history(self) -> list[dict[str, Any]]:
         """Load and return the download history list."""
         h_path = _history_file_path()
         if not h_path.exists():
+            self._history_cache = []
+            self._history_mtime = None
             return []
         try:
+            mtime = h_path.stat().st_mtime_ns
+            if getattr(self, "_history_mtime", None) == mtime and hasattr(self, "_history_cache"):
+                return list(self._history_cache)
             with open(h_path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
             modified = False
@@ -350,9 +451,12 @@ class Config:
                 try:
                     with open(h_path, "w", encoding="utf-8") as fw:
                         json.dump(data, fw, indent=2, ensure_ascii=False)
+                    mtime = h_path.stat().st_mtime_ns
                 except Exception:
                     pass
-            return data
+            self._history_cache = data
+            self._history_mtime = mtime
+            return list(data)
         except Exception as exc:
             logger.error("Failed to load history: %s", exc)
             return []
@@ -394,6 +498,8 @@ class Config:
         try:
             with open(h_path, "w", encoding="utf-8") as fh:
                 json.dump(history, fh, indent=2, ensure_ascii=False)
+            self._history_cache = history
+            self._history_mtime = h_path.stat().st_mtime_ns
         except Exception as exc:
             logger.error("Failed to save history: %s", exc)
 
@@ -406,6 +512,8 @@ class Config:
             try:
                 with open(h_path, "w", encoding="utf-8") as fh:
                     json.dump(new_history, fh, indent=2, ensure_ascii=False)
+                self._history_cache = new_history
+                self._history_mtime = h_path.stat().st_mtime_ns
                 return True
             except Exception as exc:
                 logger.error("Failed to update history: %s", exc)
@@ -417,6 +525,8 @@ class Config:
         try:
             with open(h_path, "w", encoding="utf-8") as fh:
                 json.dump([], fh)
+            self._history_cache = []
+            self._history_mtime = h_path.stat().st_mtime_ns
             return True
         except Exception as exc:
             logger.error("Failed to clear history: %s", exc)

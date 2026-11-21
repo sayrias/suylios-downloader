@@ -55,8 +55,8 @@ class _TeeStream:
         return self._real.fileno()
 
 def _setup_log() -> Path:
-    log_dir = PROJECT_ROOT / "logs"
-    log_dir.mkdir(exist_ok=True)
+    log_dir = BUILD_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
     log_path = log_dir / f"build-{cmd}-{ts}.log"
@@ -72,6 +72,65 @@ def _setup_log() -> Path:
 _LOG_PATH = _setup_log()
 
 
+def _ensure_rust_and_hotfixes(target: str = "host") -> None:
+    """Derleme oncesinde hotfix manifestini ve hedef OS icin Rust hibrit motorunu hazirla.
+
+    target: "host" | "linux" | "windows"
+    Linux üzerinde target="windows" seçilirse x86_64-pc-windows-gnu ile
+    bin/suylios-engine.exe çapraz derlenir (x86_64-w64-mingw32-gcc gerekir).
+    """
+    hotfix_script = PROJECT_ROOT / "hotfixes" / "tools" / "build_and_sign.py"
+    if hotfix_script.is_file():
+        try:
+            subprocess.run(
+                [sys.executable, str(hotfix_script), "--out", str(PROJECT_ROOT / "hotfixes" / "dist")],
+                cwd=str(PROJECT_ROOT),
+                check=False,
+            )
+        except Exception as e:
+            print(f"[UYARI] Hotfix manifest hazirlama atlandi: {e}")
+
+    want_windows = (target == "windows") or (target == "host" and IS_WINDOWS)
+    rust_manifest = PROJECT_ROOT / "rust" / "Cargo.toml"
+    exe_name = "suylios-engine.exe" if want_windows else "suylios-engine"
+    target_bin = BIN_DIR / exe_name
+    cargo_bin = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / ("cargo.exe" if IS_WINDOWS else "cargo"))
+
+    if not (rust_manifest.is_file() and Path(cargo_bin).exists()):
+        if not target_bin.is_file():
+            print(f"[UYARI] Rust (cargo) bulunamadı, {exe_name} derlenemedi.")
+        return
+
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = [cargo_bin, "build", "--manifest-path", str(rust_manifest), "--release", "-p", "suylios-engine"]
+    env = os.environ.copy()
+    cargo_home_bin = str(Path.home() / ".cargo" / "bin")
+    if cargo_home_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{cargo_home_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    if want_windows and not IS_WINDOWS:
+        # Linux -> Windows x64 çapraz derleme
+        target_triple = "x86_64-pc-windows-gnu"
+        mingw_gcc = shutil.which("x86_64-w64-mingw32-gcc")
+        if not mingw_gcc:
+            print("[UYARI] Windows çapraz derleme için x86_64-w64-mingw32-gcc bulunamadı.")
+            return
+        cmd += ["--target", target_triple]
+        env["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER"] = mingw_gcc
+        built_bin = PROJECT_ROOT / "rust" / "target" / target_triple / "release" / "suylios-engine.exe"
+        print("[RUST] Windows hedefi için çapraz derleniyor (x86_64-pc-windows-gnu)...")
+    else:
+        built_bin = PROJECT_ROOT / "rust" / "target" / "release" / exe_name
+        print(f"[RUST] Rust Hibrit Motoru ({exe_name}) derleniyor...")
+
+    res = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env)
+    if res.returncode == 0 and built_bin.is_file():
+        shutil.copy2(built_bin, target_bin)
+        if not want_windows:
+            target_bin.chmod(0o755)
+        print(f"[RUST] Hazir: {target_bin}")
+
+
 # ──────────────────────────────────────────────
 #  Uygulama meta
 # ──────────────────────────────────────────────
@@ -83,7 +142,7 @@ def _get_app_version() -> str:
                 return line.split("=")[1].strip().strip('"\'')
     except Exception:
         pass
-    return "1.4.3"
+    return "2.0.0"
 
 APP_NAME      = "Suylios Downloader"
 APP_VERSION   = _get_app_version()
@@ -515,9 +574,25 @@ def _build_pyinstaller(name: str, onefile: bool, workpath: Path) -> bool:
             "--hidden-import=clr",
         ]
 
-    json_sites_path = PROJECT_ROOT / "SUPPORTED_SITES.json"
+    _ensure_rust_and_hotfixes()
+
+    json_sites_path = PROJECT_ROOT / "hotfixes" / "SUPPORTED_SITES.json"
+    if not json_sites_path.exists():
+        json_sites_path = PROJECT_ROOT / "SUPPORTED_SITES.json"
     if json_sites_path.exists():
         cmd.append(f"--add-data={json_sites_path}{sep}.")
+
+    gdl_plugins_path = SRC_DIR / "extractors" / "gdl_plugins"
+    if gdl_plugins_path.is_dir():
+        cmd.append(f"--add-data={gdl_plugins_path}{sep}src/extractors/gdl_plugins")
+
+    hotfixes_path = PROJECT_ROOT / "hotfixes"
+    if hotfixes_path.is_dir():
+        cmd.append(f"--add-data={hotfixes_path}{sep}hotfixes")
+
+    rust_engine_path = BIN_DIR / ("suylios-engine.exe" if IS_WINDOWS else "suylios-engine")
+    if onefile and rust_engine_path.is_file():
+        cmd.append(f"--add-binary={rust_engine_path}{sep}bin")
 
     ffmpeg_path = BIN_DIR / ("ffmpeg.exe" if IS_WINDOWS else "ffmpeg")
     if onefile and ffmpeg_path.exists():
@@ -612,13 +687,17 @@ def build_portable():
             )
             launcher.chmod(0o755)
 
-        # ffmpeg
+        # ffmpeg ve Rust Hibrit Motoru (sadece hedef OS için gereken ikililer)
         portable_bin = portable_dir / "bin"
         portable_bin.mkdir(exist_ok=True)
-        for ff in ("ffmpeg.exe", "ffmpeg"):
-            src = BIN_DIR / ff
+        target_bins = ("ffmpeg.exe", "suylios-engine.exe") if IS_WINDOWS else ("ffmpeg", "suylios-engine")
+        for bname in target_bins:
+            src = BIN_DIR / bname
             if src.exists():
-                shutil.copy2(src, portable_bin / ff)
+                dst_b = portable_bin / bname
+                shutil.copy2(src, dst_b)
+                if not IS_WINDOWS:
+                    dst_b.chmod(0o755)
 
         # ZIP oluştur
         zip_path = DIST_DIR / "Suylios-Portable.zip"
@@ -725,10 +804,10 @@ def _build_setup_windows(build_out: Path):
 
     staging_bin = staging_dir / "bin"
     staging_bin.mkdir(exist_ok=True)
-    for ff in ("ffmpeg.exe", "ffmpeg"):
-        src = BIN_DIR / ff
+    for bname in ("ffmpeg.exe", "suylios-engine.exe"):
+        src = BIN_DIR / bname
         if src.exists():
-            shutil.copy2(src, staging_bin / ff)
+            shutil.copy2(src, staging_bin / bname)
 
     icon_file    = SRC_DIR / "ui" / "icon.ico"
     info_tr_file = BUILD_DIR / "info_tr.txt"
@@ -791,8 +870,22 @@ def build_setup():
             wine_dist    = "build"
             wine_work    = "build\\temp_wine_setup"
             wine_spec    = "build"
+            _ensure_rust_and_hotfixes(target="windows")
+
+            # Wine Python içinde curl_cffi kurulu değilse otomatik kur
+            chk_curl = subprocess.run(
+                ["wine", str(wine_py), "-c", "import curl_cffi"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if chk_curl.returncode != 0:
+                print("[INFO] Wine Python'a curl_cffi yükleniyor...")
+                subprocess.run(
+                    ["wine", str(wine_py), "-m", "pip", "install", "--quiet", "curl_cffi"],
+                    cwd=str(PROJECT_ROOT),
+                )
+
             wine_icon    = "..\\src\\ui\\icon.ico"
-            wine_json    = "..\\SUPPORTED_SITES.json"
+            wine_json    = "..\\hotfixes\\SUPPORTED_SITES.json"
 
             # Remove old build/SuyliosDownloader to prevent Wine PermissionError
             import shutil
@@ -805,8 +898,12 @@ def build_setup():
                 f"--icon={wine_icon}",
                 f"--add-data={wine_src_ui};ui",
             ]
-            if (PROJECT_ROOT / "SUPPORTED_SITES.json").exists():
+            if (PROJECT_ROOT / "hotfixes" / "SUPPORTED_SITES.json").exists():
                 cmd += [f"--add-data={wine_json};."]
+            if (PROJECT_ROOT / "hotfixes").is_dir():
+                cmd += ["--add-data=..\\hotfixes;hotfixes"]
+            if (SRC_DIR / "extractors" / "gdl_plugins").is_dir():
+                cmd += ["--add-data=..\\src\\extractors\\gdl_plugins;src/extractors/gdl_plugins"]
 
             cmd += [
                 "--collect-submodules=gallery_dl",
@@ -869,28 +966,200 @@ def build_setup():
 
 
 # ──────────────────────────────────────────────
-#  3. Tek Dosya Standalone
+#  3. Linux AppImage / Tek Dosya Standalone
 # ──────────────────────────────────────────────
-def build_onefile():
+def _ensure_appimage_runtime() -> Path | None:
+    """Official AppImage Type 2 runtime dosyasını önbellekten döndür veya indir."""
+    cache_dir = Path.home() / ".cache" / "suylios"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    runtime_path = cache_dir / "appimage-runtime-x86_64"
+    if runtime_path.is_file() and runtime_path.stat().st_size > 50_000:
+        return runtime_path
+
+    url = "https://github.com/AppImage/type2-runtime/releases/latest/download/runtime-x86_64"
+    print("[*] AppImage Type-2 runtime indiriliyor...")
+    try:
+        import urllib.request
+        tmp_rt = cache_dir / "runtime-x86_64.tmp"
+        urllib.request.urlretrieve(url, str(tmp_rt))
+        head = tmp_rt.read_bytes()[:12]
+        if b"AI\x02" in head or head.startswith(b"\x7fELF"):
+            tmp_rt.replace(runtime_path)
+            runtime_path.chmod(0o755)
+            return runtime_path
+        tmp_rt.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[UYARI] AppImage runtime indirilemedi: {exc}")
+    return None
+
+
+def _export_png_icon(dst_png: Path) -> None:
+    """src/ui/icon.ico dosyasını 256x256 PNG ikon olarak dışa aktar."""
+    ico_path = SRC_DIR / "ui" / "icon.ico"
+    try:
+        from PIL import Image
+        if ico_path.is_file():
+            img = Image.open(str(ico_path)).convert("RGBA").resize((256, 256))
+            img.save(str(dst_png), format="PNG")
+            return
+    except Exception as exc:
+        print(f"[UYARI] İkon PNG dönüştürme atlandı: {exc}")
+
+
+def build_appimage():
+    """Linux için gerçek Type-2 AppImage (dist/Suylios-Linux.AppImage) üret."""
     print("\n" + "="*60)
-    suffix = " (Windows .exe)" if IS_WINDOWS else " (Linux binary)"
-    print(f"  3. Tek Dosya Standalone{suffix}")
+    print("  3. Linux AppImage Paketi (Suylios-Linux.AppImage)")
+    print("="*60)
+
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    legacy_noext = DIST_DIR / "Suylios-Linux"
+    if legacy_noext.exists() and legacy_noext.is_file():
+        legacy_noext.unlink()
+
+    build_out = build_onedir()
+    appdir = BUILD_DIR / "AppDir"
+    if appdir.exists():
+        shutil.rmtree(appdir)
+
+    usr_bin = appdir / "usr" / "bin"
+    usr_bin.mkdir(parents=True, exist_ok=True)
+
+    for item in build_out.iterdir():
+        dst = usr_bin / item.name
+        if item.is_dir():
+            shutil.copytree(item, dst, symlinks=True, ignore_dangling_symlinks=True, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dst)
+
+    old_exe = usr_bin / "SuyliosDownloader"
+    new_exe = usr_bin / "suylios"
+    if old_exe.exists() and not new_exe.exists():
+        old_exe.rename(new_exe)
+    if new_exe.exists():
+        new_exe.chmod(0o755)
+
+    # Linux bin/ (suylios-engine ve varsa ffmpeg)
+    app_bin = usr_bin / "bin"
+    app_bin.mkdir(exist_ok=True)
+    for bname in ("suylios-engine", "ffmpeg"):
+        src_b = BIN_DIR / bname
+        if src_b.is_file():
+            dst_b = app_bin / bname
+            shutil.copy2(src_b, dst_b)
+            dst_b.chmod(0o755)
+
+    # DesktopEntry + PNG Icon
+    desktop_file = appdir / "suylios-downloader.desktop"
+    desktop_file.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Suylios Downloader\n"
+        "Comment=Modern Hibrit Medya ve Dosya Indirme Yoneticisi\n"
+        "Exec=suylios\n"
+        "Icon=suylios-downloader\n"
+        "Terminal=false\n"
+        "Categories=Network;FileTransfer;\n",
+        encoding="utf-8",
+    )
+    apps_dir = appdir / "usr" / "share" / "applications"
+    apps_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(desktop_file, apps_dir / "suylios-downloader.desktop")
+
+    if shutil.which("desktop-file-validate"):
+        subprocess.run(["desktop-file-validate", str(desktop_file)], check=False)
+
+    icon_png = appdir / "suylios-downloader.png"
+    _export_png_icon(icon_png)
+    if icon_png.is_file():
+        shutil.copy2(icon_png, appdir / ".DirIcon")
+        hicolor = appdir / "usr" / "share" / "icons" / "hicolor" / "256x256" / "apps"
+        hicolor.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(icon_png, hicolor / "suylios-downloader.png")
+
+    # AppRun
+    apprun = appdir / "AppRun"
+    apprun.write_text(
+        "#!/usr/bin/env bash\n"
+        'HERE="$(dirname "$(readlink -f "${0}")")"\n'
+        'export GDK_BACKEND="${GDK_BACKEND:-x11}"\n'
+        'export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\n'
+        'export WEBKIT_DMABUF_RENDERER_FORCE_SHM="${WEBKIT_DMABUF_RENDERER_FORCE_SHM:-1}"\n'
+        'exec "$HERE/usr/bin/suylios" "$@"\n',
+        encoding="utf-8",
+    )
+    apprun.chmod(0o755)
+
+    out_appimage = DIST_DIR / "Suylios-Linux.AppImage"
+    if out_appimage.exists():
+        out_appimage.unlink()
+
+    appimagetool = shutil.which("appimagetool")
+    if appimagetool:
+        env = os.environ.copy()
+        env["ARCH"] = "x86_64"
+        res = subprocess.run([appimagetool, str(appdir), str(out_appimage)], env=env)
+        if res.returncode == 0 and out_appimage.is_file():
+            out_appimage.chmod(0o755)
+            print(f"[TAMAM] Linux AppImage: {out_appimage} ({_size_mb(out_appimage)})")
+            return
+
+    mksquashfs = shutil.which("mksquashfs")
+    runtime = _ensure_appimage_runtime() if mksquashfs else None
+    if mksquashfs and runtime:
+        sqfs_path = BUILD_DIR / "suylios.squashfs"
+        if sqfs_path.exists():
+            sqfs_path.unlink()
+        print("[*] AppImage SquashFS paketleniyor (zstd)...")
+        res = subprocess.run(
+            [mksquashfs, str(appdir), str(sqfs_path), "-root-owned", "-noappend", "-comp", "zstd", "-no-progress"],
+            check=False,
+        )
+        if res.returncode != 0 or not sqfs_path.is_file():
+            # zstd desteklemiyorsa gzip'e düş
+            res = subprocess.run(
+                [mksquashfs, str(appdir), str(sqfs_path), "-root-owned", "-noappend", "-comp", "gzip", "-no-progress"],
+                check=False,
+            )
+        if res.returncode == 0 and sqfs_path.is_file():
+            with open(out_appimage, "wb") as out_f:
+                out_f.write(runtime.read_bytes())
+                with open(sqfs_path, "rb") as sq_f:
+                    shutil.copyfileobj(sq_f, out_f, 1024 * 1024)
+            out_appimage.chmod(0o755)
+            print(f"[TAMAM] Linux AppImage: {out_appimage} ({_size_mb(out_appimage)})")
+            return
+
+    # Çevrimdışı yedek: tek dosya .bin (hiçbir zaman uzantısız kalmaz)
+    print("[UYARI] AppImage araçları bulunamadı, .bin tek dosya yedeğine düşülüyor...")
+    workpath = BUILD_DIR / "temp_onefile"
+    if _build_pyinstaller("Suylios-Linux", onefile=True, workpath=workpath):
+        raw_out = DIST_DIR / "Suylios-Linux"
+        bin_out = DIST_DIR / "Suylios-Linux.bin"
+        if raw_out.exists():
+            raw_out.replace(bin_out)
+            bin_out.chmod(0o755)
+            print(f"[TAMAM] Linux Tek Dosya: {bin_out} ({_size_mb(bin_out)})")
+
+
+def build_onefile():
+    if not IS_WINDOWS:
+        build_appimage()
+        return
+
+    print("\n" + "="*60)
+    print("  3. Tek Dosya Standalone (Windows .exe)")
     print("="*60)
 
     workpath = BUILD_DIR / "temp_onefile"
-    # Linux'ta: Suylios-Linux  |  Windows'ta: Suylios.exe
-    out_name = "Suylios" if IS_WINDOWS else "Suylios-Linux"
+    out_name = "Suylios"
     ok = _build_pyinstaller(out_name, onefile=True, workpath=workpath)
     if ok:
-        out_ext = ".exe" if IS_WINDOWS else ".bin"
-        out = DIST_DIR / f"{out_name}{out_ext}"
+        out = DIST_DIR / f"{out_name}.exe"
         if out.exists():
-            if not IS_WINDOWS:
-                out.chmod(0o755)
             size_before = out.stat().st_size / 1024 / 1024
             print(f"[TAMAM] Tek Dosya: {out} ({size_before:.1f} MB)")
 
-            # UPX ile ek sıkıştırma (varsa)
             if shutil.which("upx"):
                 print("[*] UPX sıkıştırması uygulanıyor...")
                 try:
@@ -908,11 +1177,23 @@ def build_onefile():
 # ──────────────────────────────────────────────
 def clean_temp():
     print("[*] Geçici derleme dosyaları temizleniyor...")
-    shutil.rmtree(BUILD_DIR, ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "temp", ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "temp_onefile", ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "temp_wine_setup", ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "temp_wine_onefile", ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "AppDir", ignore_errors=True)
+    shutil.rmtree(BUILD_DIR / "SuyliosDownloader", ignore_errors=True)
     shutil.rmtree(DIST_DIR / "setup-staging", ignore_errors=True)
-    for f in PROJECT_ROOT.glob("*.spec"):
+    for f in (
+        *PROJECT_ROOT.glob("*.spec"),
+        *BUILD_DIR.glob("*.spec"),
+        BUILD_DIR / "info_tr.txt",
+        BUILD_DIR / "info_en.txt",
+        BUILD_DIR / "suylios.squashfs",
+        PROJECT_ROOT / "suylios_setup.iss",
+    ):
         try:
-            f.unlink()
+            f.unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -921,14 +1202,14 @@ def clean_temp():
 #  Main
 # ──────────────────────────────────────────────
 def main():
-    arg = sys.argv[1].lower() if len(sys.argv) > 1 else "menu"
+    arg = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
     if arg in ("1", "portable"):
         build_portable()
         clean_temp()
-    elif arg in ("2", "setup"):
+    elif arg in ("2", "setup", "installer"):
         build_setup()
         clean_temp()
-    elif arg in ("3", "onefile"):
+    elif arg in ("3", "onefile", "appimage", "exe"):
         build_onefile()
         clean_temp()
     elif arg in ("4", "all"):
@@ -936,8 +1217,16 @@ def main():
         build_setup()
         build_onefile()
         clean_temp()
+    elif arg == "clean":
+        clean_temp()
+        shutil.rmtree(DIST_DIR, ignore_errors=True)
+        print("[TAMAM] build/ ve dist/ temizlendi.")
+    elif arg == "deps":
+        req_file = PROJECT_ROOT / "requirements.txt"
+        if req_file.is_file():
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "-r", str(req_file)], check=False)
     else:
-        print("Kullanım: build.py [portable|setup|onefile|all]")
+        print("Kullanım: build.py [portable|appimage|setup|onefile|all|clean|deps]")
 
 
 if __name__ == "__main__":

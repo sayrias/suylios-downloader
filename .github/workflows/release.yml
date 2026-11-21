@@ -1,0 +1,41 @@
+name: Build & Publish App Release (Tag Only)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-engine-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Rust Hybrid Engine (Linux x86_64)
+        run: |
+          cargo build --manifest-path rust/Cargo.toml --release -p suylios-engine
+          mkdir -p bin
+          cp rust/target/release/suylios-engine bin/suylios-engine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suylios-engine-linux-x64
+          path: bin/suylios-engine
+
+  build-engine-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build Rust Hybrid Engine (Windows x86_64)
+        run: |
+          cargo build --manifest-path rust/Cargo.toml --release -p suylios-engine
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Copy-Item rust/target/release/suylios-engine.exe bin/suylios-engine.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suylios-engine-windows-x64
+          path: bin/suylios-engine.exe

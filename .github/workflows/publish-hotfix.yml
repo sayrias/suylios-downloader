@@ -1,0 +1,44 @@
+name: Publish Hotfix Feed (Zero Release)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'hotfixes/**'
+      - 'src/extractors/gdl_plugins/**'
+  workflow_dispatch:
+
+jobs:
+  sign-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate Hotfix Schema & Plugin Syntax
+        run: python3 hotfixes/tools/validate_schema.py
+
+      - name: Build & Sign Hotfix Feed (Ed25519)
+        env:
+          HOTFIX_PRIVKEY: ${{ secrets.HOTFIX_ED25519_PRIVATE_KEY }}
+        run: python3 hotfixes/tools/build_and_sign.py --out dist-hotfix --bump-seq
+
+      - name: Publish to gh-pages/hotfix (No GitHub Release Created)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist-hotfix
+          destination_dir: hotfix
+          keep_files: true
+
+      - name: Purge jsDelivr CDN Cache
+        run: |
+          curl -fsS "https://purge.jsdelivr.net/gh/sayrias/suylios-downloader@gh-pages/hotfix/hotfix-manifest.json" || true
+          curl -fsS "https://purge.jsdelivr.net/gh/sayrias/suylios-downloader@gh-pages/hotfix/hotfix-manifest.sig" || true

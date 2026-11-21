@@ -1,63 +1,59 @@
 @echo off
-title Suylios Derleme ve Paketleme Ussu
+chcp 65001 >nul
+title Suylios Downloader - Build
 cd /d "%~dp0"
 
-:MENU
-cls
-echo =========================================================
-echo    Suylios Downloader - Derleme ve Paketleme Ussu
-echo =========================================================
+echo ==================================================
+echo      SUYLIOS DOWNLOADER v2.0 BUILD ARACI
+echo ==================================================
 echo.
-echo   1 - Tasinabilir ZIP Paketi Derle (Suylios-Portable.zip)
-echo   2 - Kurulum Sihirbazi Derle (Suylios-Setup.exe)
-echo   3 - Tek Dosya Standalone Derle (Suylios.exe)
-echo   4 - Hepsini Sirayla Derle (Tumunu Uret)
-echo   0 - Cikis
+echo   1 - Tam Build (Portable ZIP + Setup.exe + Suylios.exe)
+echo   2 - Taşınabilir ZIP (Suylios-Portable.zip)
+echo   3 - Kurulum Sihirbazı (Suylios-Setup.exe)
+echo   4 - Tek Dosya EXE (Suylios.exe)
+echo   5 - Bağımlılıkları Güncelle (pip upgrade)
+echo   6 - Sadece Rust Hibrit Motoru Derle (bin\suylios-engine.exe)
+echo   7 - Temizle (build/ ve dist/ sil)
+echo   0 - Çıkış
 echo.
-echo =========================================================
-set /p secim="Seciminiz (0-4): "
+set /p choice="Seçiminiz (0-7): "
 
-set PY_CMD=python
-if exist "venv\Scripts\python.exe" set PY_CMD="venv\Scripts\python.exe"
+if not exist "build\logs" mkdir "build\logs"
 
-if "%secim%"=="1" goto BUILD_PORTABLE
-if "%secim%"=="2" goto BUILD_SETUP
-if "%secim%"=="3" goto BUILD_TEKDOSYA
-if "%secim%"=="4" goto BUILD_ALL
-if "%secim%"=="0" goto EXIT
-goto MENU
-
-:BUILD_PORTABLE
-cls
-%PY_CMD% build.py portable 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt"
-echo.
-echo Islem tamamlandi! Devam etmek icin bir tusa basin...
-pause >nul
-goto MENU
-
-:BUILD_SETUP
-cls
-%PY_CMD% build.py setup 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
-echo.
-echo Islem tamamlandi! Devam etmek icin bir tusa basin...
-pause >nul
-goto MENU
-
-:BUILD_TEKDOSYA
-cls
-%PY_CMD% build.py onefile 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
-echo.
-echo Islem tamamlandi! Devam etmek icin bir tusa basin...
-pause >nul
-goto MENU
-
-:BUILD_ALL
-cls
-%PY_CMD% build.py all 2>&1 | powershell -Command "$input | Tee-Object -FilePath build_log.txt -Append"
-echo.
-echo Islem tamamlandi! Devam etmek icin bir tusa basin...
-pause >nul
-goto MENU
-
-:EXIT
-exit
+if "%choice%"=="1" (
+    python build.py all
+    echo [LOG] Detayli ciktilar build\logs\ klasorune kaydedildi.
+    pause
+) else if "%choice%"=="2" (
+    python build.py portable
+    pause
+) else if "%choice%"=="3" (
+    python build.py setup
+    pause
+) else if "%choice%"=="4" (
+    python build.py onefile
+    pause
+) else if "%choice%"=="5" (
+    python build.py deps
+    pause
+) else if "%choice%"=="6" (
+    if exist "rust\Cargo.toml" (
+        if not exist "bin" mkdir bin
+        cargo build --manifest-path rust\Cargo.toml --release -p suylios-engine
+        if exist "rust\target\release\suylios-engine.exe" (
+            copy /y "rust\target\release\suylios-engine.exe" "bin\suylios-engine.exe"
+            echo [OK] bin\suylios-engine.exe hazir.
+        )
+    ) else (
+        echo [HATA] rust\Cargo.toml bulunamadi!
+    )
+    pause
+) else if "%choice%"=="7" (
+    python build.py clean
+    pause
+) else if "%choice%"=="0" (
+    exit /b 0
+) else (
+    echo Geçersiz seçim!
+    pause
+)

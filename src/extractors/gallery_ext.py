@@ -40,6 +40,9 @@ _ACTIVE_PROCS: dict[str, list["subprocess.Popen"]] = {}   # uid -> list of procs
 _GDL_INFO_CACHE_LOCK = threading.Lock()
 _GDL_INFO_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
+_PLUGINS_LOADED_LOCK = threading.Lock()
+_PLUGINS_LOADED = False
+
 
 def _register_proc(uid: str, proc: "subprocess.Popen") -> None:
     with _ACTIVE_PROCS_LOCK:
@@ -179,19 +182,35 @@ class GalleryDLExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_gdl_plugins() -> None:
+    def _resolve_gdl_plugins_dir() -> str:
         try:
-            import os
-            import gallery_dl.extractor
-            plugins_dir = os.path.join(os.path.dirname(__file__), "gdl_plugins")
-            if os.path.isdir(plugins_dir):
-                files = [f for f in os.listdir(plugins_dir) if f.endswith(".py") and not f.startswith("__")]
-                if hasattr(gallery_dl.extractor, "_modules_path") and hasattr(gallery_dl.extractor, "add_module"):
-                    loaded = gallery_dl.extractor._modules_path(plugins_dir, files)
-                    for mod in loaded:
-                        gallery_dl.extractor.add_module(mod)
+            overlay_dir = app_config.get_data_dir() / "runtime" / "plugins_active" / "gdl_plugins"
+            if overlay_dir.is_dir() and any(overlay_dir.glob("*.py")):
+                return str(overlay_dir.resolve())
         except Exception:
             pass
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "gdl_plugins"))
+
+    @staticmethod
+    def _load_gdl_plugins() -> None:
+        global _PLUGINS_LOADED
+        if _PLUGINS_LOADED:
+            return
+        with _PLUGINS_LOADED_LOCK:
+            if _PLUGINS_LOADED:
+                return
+            try:
+                import gallery_dl.extractor
+                plugins_dir = GalleryDLExtractor._resolve_gdl_plugins_dir()
+                if os.path.isdir(plugins_dir):
+                    files = [f for f in os.listdir(plugins_dir) if f.endswith(".py") and not f.startswith("__")]
+                    if hasattr(gallery_dl.extractor, "_modules_path") and hasattr(gallery_dl.extractor, "add_module"):
+                        loaded = gallery_dl.extractor._modules_path(plugins_dir, files)
+                        for mod in loaded:
+                            gallery_dl.extractor.add_module(mod)
+                _PLUGINS_LOADED = True
+            except Exception:
+                pass
 
     @staticmethod
     def can_handle(url: str) -> bool:
@@ -306,6 +325,32 @@ class GalleryDLExtractor(BaseExtractor):
             gdl_config.set(("extractor", "gofile"), "timeout", 5)
             gdl_config.set(("extractor",), "retries", 0)
             gdl_config.set(("extractor",), "timeout", 5)
+
+        # SimpCity: CDN (simp6.cuckcapital.cr, goonbox.cr) hotlink koruması
+        # için Referer header'ı şart. Ayrıca Instagram embed'leri 401 döndürdüğünden
+        # instagram child extractor'ı devre dışı bırakıyoruz.
+        _SIMPCITY_DOMAINS = ("simpcity.cr", "simpcity.su", "simpcity.to")
+        if any(d in url.lower() for d in _SIMPCITY_DOMAINS):
+            # Ana domain'i referer olarak belirle
+            from urllib.parse import urlparse as _urlparse
+            _parsed = _urlparse(url)
+            _origin = f"{_parsed.scheme}://{_parsed.netloc}"
+            # Extractor katmanına Referer header'ı ekle
+            gdl_config.set(("extractor",), "headers", {"Referer": _origin})
+            # Downloader (http) katmanına da ekle — CDN burada kontrol eder
+            gdl_config.set(("downloader", "http"), "headers", {"Referer": _origin})
+            # Instagram embed'lerini atla (401 Unauthorized)
+            existing_bl = []
+            try:
+                existing_bl = gdl_config.get(("extractor",), "blacklist") or []
+            except Exception:
+                pass
+            if "instagram" not in existing_bl:
+                existing_bl = list(existing_bl) + ["instagram"]
+            gdl_config.set(("extractor",), "blacklist", existing_bl)
+            # Daha toleranslı retry/timeout
+            gdl_config.set(("extractor",), "retries", 5)
+            gdl_config.set(("downloader",), "retries", 5)
 
         # Blocklist implementation: use gallery-dl's extractor.blacklist config key
         # to block certain child extractor domains.
@@ -587,10 +632,11 @@ class GalleryDLExtractor(BaseExtractor):
                             headers=item_headers,
                             progress_hook=progress_hook,
                             cancel_event=cancel_event,
+                            pause_event=kwargs.get("pause_event"),
                             display_name=disp_name,
                             item_idx=idx,
                             item_cnt=total_cnt,
-                            num_workers=32
+                            num_workers=None
                         )
                         last_file = str(out_file)
                     
@@ -599,6 +645,8 @@ class GalleryDLExtractor(BaseExtractor):
             except ExtractionCancelled:
                 raise
             except Exception as e:
+                if cancel_event and cancel_event.is_set():
+                    raise ExtractionCancelled("Download cancelled") from e
                 logger.warning("Direct fast_downloader attempt failed (%s), falling back to subprocess...", e, exc_info=True)
 
         # ---- Build gallery-dl JSON config ----
@@ -644,12 +692,46 @@ class GalleryDLExtractor(BaseExtractor):
         ):
             gdl_cfg["extractor"][_sub] = {"directory": []}
 
-        plugins_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "gdl_plugins"))
+        plugins_dir = GalleryDLExtractor._resolve_gdl_plugins_dir()
         if os.path.exists(plugins_dir):
             gdl_cfg["extractor"]["module-sources"] = [plugins_dir]
 
         if "gofile.io" in url:
             gdl_cfg["extractor"]["gofile"] = {"retries": 0, "timeout": 5}
+
+        # SimpCity: CDN (simp6.cuckcapital.cr, goonbox.cr) hotlink koruması için
+        # Referer + Origin header'ları zorunlu. Instagram embed'leri 401 verdiğinden blacklist'e ekliyoruz.
+        try:
+            from src.engine.site_registry import site_registry
+            _SIMPCITY_DOMAINS = tuple(site_registry.get_domains_for("simpcity", ["simpcity.cr", "simpcity.su", "simpcity.to", "simpcity.org"]))
+        except Exception:
+            _SIMPCITY_DOMAINS = ("simpcity.cr", "simpcity.su", "simpcity.to", "simpcity.org")
+        if any(d in url.lower() for d in _SIMPCITY_DOMAINS):
+            from urllib.parse import urlparse as _urlparse
+            _p = _urlparse(url)
+            _origin = f"{_p.scheme}://{_p.netloc}"
+            _headers = {
+                "Referer": _origin + "/",
+                "Origin": _origin,
+            }
+            # Extractor headers
+            gdl_cfg["extractor"]["headers"] = _headers
+            # Downloader → http headers (CDN burada kontrol eder)
+            gdl_cfg["downloader"]["http"]["headers"] = _headers
+            # Simpcity extractor'a da özel olarak ekle
+            gdl_cfg["extractor"]["simpcity"] = dict(
+                gdl_cfg["extractor"].get("simpcity") or {"directory": []},
+                headers=_headers,
+                retries=5,
+            )
+            # Instagram embed'lerini atla
+            _bl = list(gdl_cfg["extractor"].get("blacklist") or [])
+            if "instagram" not in _bl:
+                _bl.append("instagram")
+            gdl_cfg["extractor"]["blacklist"] = _bl
+            # Daha toleranslı retry
+            gdl_cfg["extractor"]["retries"] = 5
+            gdl_cfg["downloader"]["retries"] = 5
 
         # Blocklist: Use gallery-dl's "blacklist" config to block child extractor domains.
         # "extractor.blacklist" is the correct gallery-dl config key that prevents
@@ -673,7 +755,11 @@ class GalleryDLExtractor(BaseExtractor):
                     blocked_extractors.append(extractor_name)
             if blocked_extractors:
                 # gallery-dl's correct config key to block child extractors by category
-                gdl_cfg["extractor"]["blacklist"] = blocked_extractors
+                _existing_bl = list(gdl_cfg["extractor"].get("blacklist") or [])
+                for _e in blocked_extractors:
+                    if _e not in _existing_bl:
+                        _existing_bl.append(_e)
+                gdl_cfg["extractor"]["blacklist"] = _existing_bl
         except Exception:
             pass
 
@@ -878,9 +964,10 @@ class GalleryDLExtractor(BaseExtractor):
         )
         watcher.start()
 
+        proc: Optional[subprocess.Popen] = None
         try:
             cmd = [sys.executable, "-m", "gallery_dl", "--config-ignore"]
-            plugins_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "gdl_plugins"))
+            plugins_dir = GalleryDLExtractor._resolve_gdl_plugins_dir()
             if os.path.exists(plugins_dir):
                 cmd += ["-X", plugins_dir]
             if cfg_path and os.path.exists(cfg_path):
@@ -896,6 +983,10 @@ class GalleryDLExtractor(BaseExtractor):
 
             proc_env = os.environ.copy()
             proc_env["PYTHONWARNINGS"] = "ignore"
+            overlay_py = app_config.get_data_dir() / "runtime" / "python_overlay_active"
+            if overlay_py.is_dir():
+                existing_pp = proc_env.get("PYTHONPATH", "")
+                proc_env["PYTHONPATH"] = f"{overlay_py}{os.pathsep}{existing_pp}" if existing_pp else str(overlay_py)
             blocklist_cfg = app_config.get("blocklist", []) or []
             if isinstance(blocklist_cfg, list):
                 proc_env["SUYLIOS_BLOCKLIST"] = ",".join(blocklist_cfg)
@@ -981,10 +1072,10 @@ class GalleryDLExtractor(BaseExtractor):
             # Unregister from global tracker
             _unregister_proc(_uid, proc)
 
-            # Stop the file watcher AFTER a small delay to let it finish its last tick
-            time.sleep(0.5)  # Give watcher one more tick to catch last files
+            # Signal the file watcher immediately and join with a short timeout;
+            # the final sweep below handles any remaining files.
             _watcher_stop.set()
-            watcher.join(timeout=3)
+            watcher.join(timeout=1.5)
 
             # Final sweep: move any files the watcher missed (race condition between
             # gallery-dl writing its last files and watcher's 0.4s poll interval)

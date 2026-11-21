@@ -65,6 +65,43 @@ _MEGADL_PROGRESS = re.compile(
 _UNIT_TO_BYTES = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}
 
 # ---------------------------------------------------------------------------
+# Mega.nz public folder decryption fix — applied directly in vault.py
+# ---------------------------------------------------------------------------
+# Root cause: MegaCore.deserialize_nodes calls vault.save_public_key(node_id, url_key)
+# for EVERY node, putting url_key in _EXPORTED for all IDs.
+#
+# Then the original vault.__getitem__ does:
+#   real_node_id = next(id for id in node.keys if id in _EXPORTED)
+# For files in subfolders, node.keys = {"subfolder_id": enc1, "root_id": enc2}.
+# "subfolder_id" is encountered first and is in _EXPORTED (with url_key), so it
+# decrypts enc1 with url_key → WRONG (enc1 is encrypted with subfolder's internal key).
+#
+# Fix (in mega/vault.py):  use the LAST candidate key_id that is in _EXPORTED and
+# is not equal to node.id. Mega orders keys as: self → parent → … → shared_root.
+# The last non-self entry is always the shared root key_id, encrypted with url_key.
+# This gives the correct decryption for all nodes regardless of nesting depth.
+
+_MEGA_VAULT_PATCHED = False
+
+
+def _ensure_mega_vault_patched() -> None:
+    """Apply the public subfolder decryption fix to mega.vault.MegaVault at runtime."""
+    global _MEGA_VAULT_PATCHED
+    if _MEGA_VAULT_PATCHED:
+        return
+    try:
+        import mega.vault as _mv
+        from src.extractors.mega_vault_patched import MegaVault as _PatchedVault
+        _mv.MegaVault.__getitem__ = _PatchedVault.__getitem__
+        _MEGA_VAULT_PATCHED = True
+    except Exception as exc:
+        logger.debug("Could not patch mega.vault at runtime: %s", exc)
+
+
+_ensure_mega_vault_patched()
+
+
+# ---------------------------------------------------------------------------
 # Helper: async → sync bridge
 # ---------------------------------------------------------------------------
 
@@ -260,19 +297,24 @@ class MegaExtractor(BaseExtractor):
         progress_hook: Optional[Callable[[dict[str, Any]], None]] = None,
         **kwargs: Any,
     ) -> str:
+        cancel_event = kwargs.get("cancel_event")
         url = _normalise_url(url)
         last_exc: Optional[Exception] = None
 
         for attempt in range(1, _MAX_RETRIES + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExtractionCancelled("İndirme iptal edildi.")
             try:
                 if _megadl_path():
-                    return self._megadl_download(url, output_path, progress_hook)
+                    return self._megadl_download(url, output_path, progress_hook, cancel_event=cancel_event)
                 return _run_async(
                     self._async_download(url, output_path, progress_hook)
                 )
             except (ExtractionError, ExtractionCancelled):
                 raise
             except Exception as exc:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ExtractionCancelled("İndirme iptal edildi.") from exc
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     wait = _RETRY_BACKOFF * attempt
@@ -280,7 +322,11 @@ class MegaExtractor(BaseExtractor):
                         "Mega download attempt %d/%d failed (%s), retrying in %ds…",
                         attempt, _MAX_RETRIES, exc, wait,
                     )
-                    time.sleep(wait)
+                    if cancel_event is not None:
+                        if cancel_event.wait(timeout=wait):
+                            raise ExtractionCancelled("İndirme iptal edildi.")
+                    else:
+                        time.sleep(wait)
 
         msg = (
             f"Mega download failed after {_MAX_RETRIES} attempts: {last_exc}\n\n"
@@ -297,6 +343,7 @@ class MegaExtractor(BaseExtractor):
         url: str,
         output_path: str,
         progress_hook: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
         out_dir = Path(output_path)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -321,66 +368,90 @@ class MegaExtractor(BaseExtractor):
             bufsize=1,
         )
 
+        stop_watch = threading.Event()
+        if cancel_event is not None:
+            def _watch_cancel() -> None:
+                while not stop_watch.is_set() and proc.poll() is None:
+                    if cancel_event.is_set():
+                        try:
+                            proc.terminate()
+                            proc.wait(timeout=2)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        break
+                    stop_watch.wait(timeout=0.25)
+            threading.Thread(target=_watch_cancel, daemon=True).start()
+
         downloaded_path = str(out_dir)
         last_filename   = ""
         total_bytes     = 0
         done_bytes      = 0
 
-        for raw_line in proc.stdout:
-            line = raw_line.strip()
-            if not line:
-                continue
-            logger.debug("megadl: %s", line)
+        try:
+            for raw_line in proc.stdout:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ExtractionCancelled("Mega indirme iptal edildi.")
+                line = raw_line.strip()
+                if not line:
+                    continue
+                logger.debug("megadl: %s", line)
 
-            # Progress line
-            m = _MEGADL_PROGRESS.search(line)
-            if m:
-                done_val  = float(m.group(1))
-                done_unit = m.group(2)
-                tot_val   = float(m.group(3))
-                tot_unit  = m.group(4)
-                pct       = float(m.group(5))
-                done_bytes  = _to_bytes(done_val, done_unit)
-                total_bytes = _to_bytes(tot_val,  tot_unit)
-                if progress_hook:
-                    progress_hook({
-                        "status": "downloading",
-                        "downloaded_bytes": done_bytes,
-                        "total_bytes": total_bytes,
-                        "filename": last_filename or str(out_dir),
-                    })
-                continue
-
-            # Filename line (printed after each file completes)
-            if line and not line.lower().startswith(("error", "warning", "downloaded")):
-                candidate = out_dir / line
-                if candidate.exists():
-                    last_filename   = str(candidate)
-                    downloaded_path = last_filename
+                # Progress line
+                m = _MEGADL_PROGRESS.search(line)
+                if m:
+                    done_val  = float(m.group(1))
+                    done_unit = m.group(2)
+                    tot_val   = float(m.group(3))
+                    tot_unit  = m.group(4)
+                    pct       = float(m.group(5))
+                    done_bytes  = _to_bytes(done_val, done_unit)
+                    total_bytes = _to_bytes(tot_val,  tot_unit)
                     if progress_hook:
                         progress_hook({
                             "status": "downloading",
-                            "filename": last_filename,
-                            "downloaded_bytes": 0,
-                            "total_bytes": 0,
+                            "downloaded_bytes": done_bytes,
+                            "total_bytes": total_bytes,
+                            "filename": last_filename or str(out_dir),
                         })
+                    continue
 
-            # Error lines
-            if "error" in line.lower():
-                logger.warning("megadl output: %s", line)
-                if "not found" in line.lower() or "no such" in line.lower():
-                    raise ExtractionError(
-                        "Bu Mega linki bulunamadı veya süresi dolmuş.\n"
-                        "Linkin hâlâ geçerli olduğunu kontrol edin."
-                    )
-                if "quota" in line.lower() or "transfer" in line.lower():
-                    raise ExtractionError(
-                        "Mega indirme kotası aşıldı. "
-                        "Bir süre bekleyin veya Mega hesabı kullanın."
-                    )
+                # Filename line (printed after each file completes)
+                if line and not line.lower().startswith(("error", "warning", "downloaded")):
+                    candidate = out_dir / line
+                    if candidate.exists():
+                        last_filename   = str(candidate)
+                        downloaded_path = last_filename
+                        if progress_hook:
+                            progress_hook({
+                                "status": "downloading",
+                                "filename": last_filename,
+                                "downloaded_bytes": 0,
+                                "total_bytes": 0,
+                            })
 
-        proc.wait()
-        rc = proc.returncode
+                # Error lines
+                if "error" in line.lower():
+                    logger.warning("megadl output: %s", line)
+                    if "not found" in line.lower() or "no such" in line.lower():
+                        raise ExtractionError(
+                            "Bu Mega linki bulunamadı veya süresi dolmuş.\n"
+                            "Linkin hâlâ geçerli olduğunu kontrol edin."
+                        )
+                    if "quota" in line.lower() or "transfer" in line.lower():
+                        raise ExtractionError(
+                            "Mega indirme kotası aşıldı. "
+                            "Bir süre bekleyin veya Mega hesabı kullanın."
+                        )
+
+            proc.wait()
+            rc = proc.returncode
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExtractionCancelled("Mega indirme iptal edildi.")
+        finally:
+            stop_watch.set()
 
         if rc != 0:
             raise ExtractionError(
@@ -421,20 +492,62 @@ class MegaExtractor(BaseExtractor):
                 dest = await m.download_public_file(handle, key, out_dir)
             dest_path = str(dest) if dest else str(out_dir)
         else:
-            handle, key, _ = MegaNzClient.parse_folder_url(url)
+            handle, key, subfolder_id = MegaNzClient.parse_folder_url(url)
             async with MegaNzClient() as m:
                 await m.login()
-                fs = await m.get_public_filesystem(handle, key)
-                folder_name = getattr(getattr(fs, "root", None), "name", handle) or handle
-                dest_folder = out_dir / _safe_filename(folder_name)
+
+                # Klasör adını güvenli şekilde al
+                try:
+                    fs = await m.get_public_filesystem(handle, key)
+                    root = getattr(fs, "root", None)
+                    root_attrs = getattr(root, "attributes", None) if root else None
+                    folder_name = getattr(root_attrs, "name", None) or handle
+                except Exception:
+                    folder_name = handle
+
+                dest_folder = out_dir / _safe_filename(str(folder_name))
                 dest_folder.mkdir(parents=True, exist_ok=True)
-                await m.download_public_folder(handle, key, dest_folder)
+
+                # download_public_folder ile indir; root_id ile subfolder filtresi uygula
+                try:
+                    results = await m.download_public_folder(
+                        handle, key, dest_folder, root_id=subfolder_id
+                    )
+                    # DownloadResults: .success (dict) ve .fails (dict)
+                    success_map = getattr(results, "success", {}) or {}
+                    fail_map    = getattr(results, "fails",   {}) or {}
+
+                    if fail_map:
+                        logger.warning(
+                            "Mega klasör indirmesi %d başarılı, %d başarısız dosya içeriyor.",
+                            len(success_map), len(fail_map),
+                        )
+                        for node_id, exc in list(fail_map.items())[:5]:
+                            logger.debug("  Başarısız node %s: %s", node_id, exc)
+
+                    # Hiç dosya indirilemediyse — kütüphane bu klasörü desteklemiyor
+                    if not success_map and fail_map:
+                        raise ExtractionError(
+                            f"Mega klasör indirmesi tamamen başarısız oldu ({len(fail_map)} dosya).\n\n"
+                            "async-mega-py bu klasörün şifresini çözemiyor (node attribute decrypt hatası).\n"
+                            "Çözüm: megatools paketini kurun:\n"
+                            "  sudo dnf install megatools\n"
+                            "  veya\n"
+                            "  sudo apt install megatools\n"
+                            "Kurulumdan sonra indirme otomatik olarak megatools ile yapılacaktır."
+                        )
+                except ExtractionError:
+                    raise
+                except Exception as dl_exc:
+                    raise
+
             dest_path = str(dest_folder)
 
         if progress_hook:
             progress_hook({"status": "finished", "filename": dest_path})
 
         return dest_path
+
 
 
 # ---------------------------------------------------------------------------

@@ -16,24 +16,44 @@ Proxy Sırası:
 5. Proxy yok — doğrudan bağlan
 """
 
+from collections import defaultdict, deque
+import concurrent.futures
 import json
 import logging
 import os
+import random
 import re
 import socket
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 import requests
 
-from src.extractors.base_extractor import BaseExtractor, ExtractionError
+from src.config import config
+from src.extractors.base_extractor import BaseExtractor, ExtractionCancelled, ExtractionError
+from src.extractors.fast_downloader import (
+    SlidingSpeedTracker,
+    _sleep_cancelable,
+    _wait_if_paused,
+    compute_smart_workers,
+    min_split_bytes,
+    ranged_work_stealing_download,
+    should_start_direct_segmented,
+)
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE = 524288  # 512 KB for high-throughput downloads
+_CHUNK_SIZE = 262144  # 256 KB stream read/write buffer
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2
+_PARALLEL_MIN = 1536 * 1024      # kalan veri bundan büyükse parçalı moda geçilebilir
+_SLOW_BPS = 400 * 1024            # ortalama hız bunun altındaysa 'yavaş' sayılır
+_PARALLEL_CONNS = 8
+_DOH_TTL_SECS = 600               # 10 dakika DoH önbellek
+_TREE_TTL_SECS = 300              # 5 dakika içerik ağacı önbelleği
 
 _URL_PATTERN = re.compile(
     r"https?://(?:www\.)?gofile\.io/(?:d/|/?c=)(?P<id>[A-Za-z0-9_-]+)",
@@ -69,6 +89,8 @@ class _RateLimitError(Exception):
 class GofileExtractor(BaseExtractor):
     """Gofile downloader – proxy destekli, curl_cffi öncelikli, çok katmanlı."""
 
+    _slow_host_ts: dict[str, float] = {}
+
     def __init__(self) -> None:
         self._token: Optional[str] = None
         self._tokens_pool: list[str] = []
@@ -76,6 +98,64 @@ class GofileExtractor(BaseExtractor):
         self._proxy: Optional[str] = None  # Çalışan proxy URL'si
         self._session = requests.Session()
         self._session.headers.update(_DEFAULT_HEADERS)
+        self._dl_local = threading.local()
+        self._dl_lock = threading.Lock()
+        self._no_parallel_hosts: set[str] = set()
+        self._range_verified_hosts: set[str] = set()
+        self._host_best_proto: dict[str, Any] = {}
+        self._host_v2_only: set[str] = set()
+        self._all_pools: list[dict[int, Any]] = []
+
+    def _get_thread_host_pool(self, host: str) -> dict[int, Any]:
+        pools = getattr(self._dl_local, "host_pools", None)
+        if pools is None:
+            pools = {}
+            self._dl_local.host_pools = pools
+        if host not in pools:
+            pool: dict[int, Any] = {}
+            pools[host] = pool
+            with self._dl_lock:
+                self._all_pools.append(pool)
+        return pools[host]
+
+    def _close_all_pools(self) -> None:
+        with self._dl_lock:
+            for pool in self._all_pools:
+                for s in pool.values():
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                pool.clear()
+            self._all_pools.clear()
+
+    @classmethod
+    def _is_host_slow(cls, host: str) -> bool:
+        ts = cls._slow_host_ts.get(host, 0.0)
+        return ts > 0.0 and (time.monotonic() - ts) < 180.0
+
+    @classmethod
+    def _mark_host_slow(cls, host: str) -> None:
+        if host:
+            cls._slow_host_ts[host] = time.monotonic()
+
+    @staticmethod
+    def _new_cffi_dl_session(proxies: dict[str, str], use_v3: bool = False, http_ver: Optional[Any] = None) -> Any:
+        from curl_cffi.requests import Session as CffiSession
+        from curl_cffi import CurlHttpVersion, CurlOpt
+        if http_ver is not None:
+            ver = http_ver
+        else:
+            ver = CurlHttpVersion.V3 if (use_v3 and not proxies) else CurlHttpVersion.V2TLS
+        kw: dict[str, Any] = {
+            "impersonate": "chrome",
+            "proxies": proxies,
+            "http_version": ver,
+        }
+        if not proxies:
+            # IPv4'e sabitle: IPv6 kaynaklı anlık bağlantı reddi ve gecikmeleri önler
+            kw["curl_options"] = {CurlOpt.IPRESOLVE: 1}
+        return CffiSession(**kw)
 
     # ------------------------------------------------------------------
     # Capability
@@ -127,54 +207,233 @@ class GofileExtractor(BaseExtractor):
         if not files:
             raise ExtractionError("Gofile içeriğinde indirilebilir dosya bulunamadı.")
 
+        _cancel = kwargs.get("cancel_event")
+        _pause = kwargs.get("pause_event")
         last_path = ""
-        for idx, finfo in enumerate(files, 1):
+
+        # Tek dosya: doğrudan maksimum hızla indir
+        if len(files) == 1:
+            finfo = files[0]
             fid = finfo.get("id", "")
             fname = self._safe_filename(finfo.get("name", fid))
             file_dest = dest / fname
-
             if fid in downloaded_set and file_dest.exists() and file_dest.stat().st_size > 0:
                 logger.debug("Zaten indirilmiş ve dosyası mevcut, atlıyor: %s", fname)
                 last_path = str(file_dest)
-                continue
-
-            file_url = finfo.get("link", "")
-            if not file_url:
-                logger.warning("Dosya için indirme bağlantısı yok: %s", fname)
-                continue
-            file_size = finfo.get("size", 0)
-
-            try:
-                def _wrapped_hook(data: dict[str, Any]) -> None:
-                    data["item_index"] = idx
-                    data["item_count"] = len(files)
-                    data["item_title"] = fname
-                    if "speed" not in data or not data.get("speed"):
-                        data["speed"] = getattr(self, "_last_speed", 0.0)
-                    if progress_hook:
-                        progress_hook(data)
-
+            else:
+                file_url = finfo.get("link", "")
+                if not file_url:
+                    raise ExtractionError("Dosya için indirme bağlantısı bulunamadı.")
+                file_size = finfo.get("size", 0)
                 if progress_hook:
                     progress_hook({
                         "status": "downloading",
                         "filename": str(file_dest),
-                        "item_index": idx,
-                        "item_count": len(files),
+                        "item_index": 1,
+                        "item_count": 1,
                         "item_title": fname,
                         "downloaded_bytes": 0,
                         "total_bytes": file_size,
-                        "speed": getattr(self, "_last_speed", 0.0),
+                        "speed": 0.0,
+                    })
+                try:
+                    self._download_file(
+                        file_url, file_dest, file_size, progress_hook,
+                        cancel_event=_cancel, pause_event=_pause,
+                    )
+                    downloaded_set.add(fid)
+                    self._save_tracker(tracker_path, downloaded_set)
+                    last_path = str(file_dest)
+                except ExtractionCancelled:
+                    raise
+                except Exception as exc:
+                    if type(exc).__name__ == "_CancelledError" or (_cancel is not None and _cancel.is_set()):
+                        raise ExtractionCancelled("İndirme iptal edildi.") from exc
+                    logger.error("Gofile dosyası 1/1 (%s) indirilemedi: %s", fname, exc)
+                finally:
+                    self._close_all_pools()
+        else:
+            # Çoklu galeri: yavaş/aşırı yüklü sunucuların hızlı sunucuları tıkamasını önlemek
+            # için sunucu bazlı dengeli zamanlama ve eşzamanlı indirme havuzu (en fazla 3 dosya)
+            total_count = len(files)
+            pending_items: list[tuple[int, dict[str, Any], Path, str, int, str]] = []
+            per_file_done: dict[int, int] = {}
+            per_file_speed: dict[int, float] = {}
+            completed_count = 0
+            total_gallery_bytes = 0
+
+            for idx, finfo in enumerate(files, 1):
+                fid = finfo.get("id", "")
+                fname = self._safe_filename(finfo.get("name", fid))
+                file_dest = dest / fname
+                fsz = max(0, int(finfo.get("size", 0) or 0))
+                if fsz == 0 and file_dest.exists():
+                    fsz = file_dest.stat().st_size
+                total_gallery_bytes += fsz
+                if fid in downloaded_set and file_dest.exists() and file_dest.stat().st_size > 0:
+                    logger.debug("Zaten indirilmiş ve dosyası mevcut, atlıyor: %s", fname)
+                    last_path = str(file_dest)
+                    per_file_done[idx] = fsz or file_dest.stat().st_size
+                    completed_count += 1
+                    continue
+                file_url = finfo.get("link", "")
+                if not file_url:
+                    logger.warning("Dosya için indirme bağlantısı yok: %s", fname)
+                    continue
+                host = urlparse(file_url).hostname or ""
+                pending_items.append((idx, finfo, file_dest, file_url, fsz, host))
+
+            if pending_items:
+                host_queues: dict[str, deque] = defaultdict(deque)
+                for item in pending_items:
+                    host_queues[item[5]].append(item)
+                per_host_active: dict[str, int] = defaultdict(int)
+                agg_lock = threading.Lock()
+                tracker_lock = threading.Lock()
+                state_box: dict[str, Any] = {
+                    "last_path": last_path,
+                    "completed": completed_count,
+                    "last_emit": 0.0,
+                    "latest_title": pending_items[0][2].name,
+                    "latest_detail": "Sunucu bağlanıyor...",
+                }
+                pool_workers = min(3, len(pending_items))
+                seg_en_g, seg_conns_g, _ = config.get_segmented_settings()
+                queue_cond = threading.Condition(agg_lock)
+
+                def _pick_next_item():
+                    with queue_cond:
+                        while True:
+                            if _cancel is not None and _cancel.is_set():
+                                return None, 1
+                            candidates = [h for h, dq in host_queues.items() if dq]
+                            if not candidates:
+                                return None, 1
+                            # Hızlı sunuculara öncelik ver; yavaş/tıkanan sunucuda aynı anda en fazla 1 dosya çalıştır
+                            healthy = [h for h in candidates if not self._is_host_slow(h)]
+                            if healthy:
+                                chosen_host = min(healthy, key=lambda h: (per_host_active[h], -len(host_queues[h])))
+                            else:
+                                free_slow = [h for h in candidates if per_host_active[h] == 0]
+                                if not free_slow:
+                                    queue_cond.wait(timeout=0.4)
+                                    continue
+                                chosen_host = max(free_slow, key=lambda h: len(host_queues[h]))
+                            item_tup = host_queues[chosen_host].popleft()
+                            per_host_active[chosen_host] += 1
+                            remaining_queues = sum(1 for dq in host_queues.values() if dq)
+                            active_total = sum(per_host_active.values()) + remaining_queues
+                            if not seg_en_g:
+                                item_conns = 1
+                            elif self._is_host_slow(chosen_host):
+                                item_conns = min(seg_conns_g, 5)
+                            elif active_total > 1:
+                                item_conns = max(4, seg_conns_g // min(3, active_total))
+                            else:
+                                item_conns = seg_conns_g
+                            return item_tup, item_conns
+
+                def _emit_gallery(item_title: str, item_file: Path, item_done: int, item_size: int, force: bool = False) -> None:
+                    if not progress_hook:
+                        return
+                    now = time.monotonic()
+                    with agg_lock:
+                        if not force and (now - state_box["last_emit"] < 0.15):
+                            return
+                        state_box["last_emit"] = now
+                        agg_done = sum(per_file_done.values())
+                        agg_speed = sum(per_file_speed.values())
+                        done_cnt = state_box["completed"]
+                        cur_idx = min(total_count, done_cnt + 1 if done_cnt < total_count else total_count)
+                        title_snap = state_box["latest_title"] or item_title
+                        active_files = sum(per_host_active.values())
+                        sub_detail = state_box.get("latest_detail", "")
+                    if active_files > 1 and sub_detail:
+                        detail_text = f"{active_files} eşzamanlı • {sub_detail}"
+                    elif active_files > 1:
+                        detail_text = f"{active_files} dosya paralel iniyor"
+                    else:
+                        detail_text = sub_detail or "İndiriliyor..."
+                    use_total = total_gallery_bytes if total_gallery_bytes > 0 else item_size
+                    use_done = agg_done if total_gallery_bytes > 0 else item_done
+                    eta = int((use_total - use_done) / agg_speed) if agg_speed > 0 and use_total > use_done else 0
+                    progress_hook({
+                        "status": "downloading",
+                        "status_detail": detail_text,
+                        "filename": str(item_file),
+                        "item_index": cur_idx,
+                        "item_count": total_count,
+                        "item_title": title_snap,
+                        "downloaded_bytes": use_done,
+                        "total_bytes": use_total,
+                        "speed": agg_speed,
+                        "eta": eta,
                     })
 
-                self._download_file(file_url, file_dest, file_size, _wrapped_hook)
-                downloaded_set.add(fid)
-                self._save_tracker(tracker_path, downloaded_set)
-                last_path = str(file_dest)
-            except Exception as exc:
-                logger.error(
-                    "Gofile dosyası %d/%d (%s) indirilemedi: %s",
-                    idx, len(files), fname, exc,
-                )
+                def _gallery_worker() -> None:
+                    while True:
+                        _wait_if_paused(_pause, _cancel)
+                        nxt, item_conns = _pick_next_item()
+                        if nxt is None:
+                            return
+                        idx, finfo, file_dest, file_url, fsz, host = nxt
+                        fid = finfo.get("id", "")
+                        fname = file_dest.name
+                        try:
+                            with agg_lock:
+                                state_box["latest_title"] = fname
+
+                            def _item_hook(data: dict[str, Any], _idx=idx, _fname=fname, _fdest=file_dest, _fsz=fsz, _host=host) -> None:
+                                db = max(0, int(data.get("downloaded_bytes") or 0))
+                                sp = float(data.get("speed") or 0.0)
+                                with agg_lock:
+                                    if _fsz > 0:
+                                        db = min(db, _fsz)
+                                    prev = per_file_done.get(_idx, 0)
+                                    if db > prev:
+                                        per_file_done[_idx] = db
+                                    per_file_speed[_idx] = sp
+                                    state_box["latest_title"] = _fname
+                                    if data.get("status_detail"):
+                                        state_box["latest_detail"] = str(data["status_detail"])
+                                _emit_gallery(_fname, _fdest, db, _fsz, force=False)
+
+                            self._download_file(
+                                file_url, file_dest, fsz, _item_hook,
+                                cancel_event=_cancel, pause_event=_pause,
+                                max_conns_override=item_conns,
+                            )
+                            actual_sz = file_dest.stat().st_size if file_dest.exists() else fsz
+                            with agg_lock:
+                                per_file_done[idx] = max(fsz, actual_sz)
+                                per_file_speed[idx] = 0.0
+                                state_box["completed"] += 1
+                                state_box["last_path"] = str(file_dest)
+                            with tracker_lock:
+                                downloaded_set.add(fid)
+                                self._save_tracker(tracker_path, downloaded_set)
+                            _emit_gallery(fname, file_dest, actual_sz, fsz or actual_sz, force=True)
+                        except ExtractionCancelled:
+                            raise
+                        except Exception as exc:
+                            with agg_lock:
+                                per_file_speed[idx] = 0.0
+                            if type(exc).__name__ == "_CancelledError" or (_cancel is not None and _cancel.is_set()):
+                                raise ExtractionCancelled("İndirme iptal edildi.") from exc
+                            logger.error("Gofile dosyası %d/%d (%s) indirilemedi: %s", idx, total_count, fname, exc)
+                        finally:
+                            with queue_cond:
+                                per_host_active[host] = max(0, per_host_active[host] - 1)
+                                queue_cond.notify_all()
+
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+                        futs = [pool.submit(_gallery_worker) for _ in range(pool_workers)]
+                        for fut in futs:
+                            fut.result()
+                    last_path = state_box["last_path"]
+                finally:
+                    self._close_all_pools()
 
         if not last_path:
             raise ExtractionError(
@@ -245,25 +504,39 @@ class GofileExtractor(BaseExtractor):
         self._proxy = ""
         logger.debug("Gofile: Proxy bulunamadı, doğrudan bağlantı deneniyor.")
 
+    _doh_cache: dict[str, tuple[float, list[str]]] = {}
+    _doh_lock = threading.Lock()
+    _doh_session: Optional[requests.Session] = None
+
     def _resolve_via_doh(self, hostname: str) -> list[str]:
         """
-        DNS over HTTPS (DoH) ile hostname'i çöz.
-        ISP'nin DNS bloğunu Google/Cloudflare/Quad9 DoH üzerinden atlatır.
+        DNS over HTTPS (DoH) ile hostname'i çöz (10 dk önbellekli + keep-alive).
+        Önce A (IPv4) sorgular; yalnızca boş dönerse AAAA dener.
         """
-        # Hem IPv4 (A=1) hem IPv6 (AAAA=28) için sorgu yap
-        all_ips = []
-        for record_type in ["A", "AAAA"]:
-            doh_endpoints = [
+        now = time.monotonic()
+        with GofileExtractor._doh_lock:
+            hit = GofileExtractor._doh_cache.get(hostname)
+            if hit and (now - hit[0]) < _DOH_TTL_SECS:
+                return list(hit[1])
+            if GofileExtractor._doh_session is None:
+                GofileExtractor._doh_session = requests.Session()
+            doh_sess = GofileExtractor._doh_session
+
+        all_ips: list[str] = []
+        for record_type in ("A", "AAAA"):
+            if record_type == "AAAA" and all_ips:
+                break
+            doh_endpoints = (
                 f"https://dns.google/resolve?name={hostname}&type={record_type}",
                 f"https://cloudflare-dns.com/dns-query?name={hostname}&type={record_type}",
                 f"https://dns.quad9.net/dns-query?name={hostname}&type={record_type}",
-            ]
+            )
             for endpoint in doh_endpoints:
                 try:
-                    resp = requests.get(
+                    resp = doh_sess.get(
                         endpoint,
                         headers={"Accept": "application/dns-json"},
-                        timeout=5,
+                        timeout=3,
                         verify=True,
                     )
                     if resp.status_code == 200:
@@ -275,13 +548,15 @@ class GofileExtractor(BaseExtractor):
                         ]
                         if ips:
                             all_ips.extend(ips)
-                            break  # Bu record_type için başarılı oldu, diğer endpointleri deneme
+                            break
                 except Exception as e:
                     logger.debug("DoH endpoint başarısız (%s): %s", endpoint, e)
-        
+
         if all_ips:
-            # IPv6 (içinde : olanları) öne almayı tercih edebiliriz (Cloudflare IPv4 banından kaçınmak için)
-            all_ips.sort(key=lambda ip: ":" not in ip)
+            # IPv4 adreslerini öne al (IPv6 erişimi olmayan ağlarda gereksiz timeout'u önler)
+            all_ips.sort(key=lambda ip: ":" in ip)
+            with GofileExtractor._doh_lock:
+                GofileExtractor._doh_cache[hostname] = (time.monotonic(), list(all_ips))
             logger.debug("DoH ile %s çözümlendi: %s", hostname, all_ips)
             return all_ips
         return []
@@ -527,14 +802,24 @@ class GofileExtractor(BaseExtractor):
         return None
 
     def _compute_wt(self, token: Optional[str] = None, custom_ua: Optional[str] = None) -> str:
-        """Gofile wt.obf.js içindeki generateWT (SHA-256) algoritmasını dinamik hesaplar."""
+        """Gofile wt.obf.js içindeki generateWT (SHA-256) algoritmasını dinamik hesaplar (canlı hotfix manifesti destekli)."""
         import hashlib
         import os
         tok = token if token is not None else (self._token or "")
         ua = custom_ua or _DEFAULT_HEADERS.get("User-Agent", "")
         lang = _DEFAULT_HEADERS.get("Accept-Language", "").split(",")[0] or "en-US"
-        time_slot = str(int(time.time() // 14400))
-        salt = os.getenv("GOFILE_WT_SALT", "12af056dacea0b")
+        interval = 14400
+        salt = os.getenv("GOFILE_WT_SALT", "")
+        if not salt:
+            try:
+                from src.engine.site_registry import site_registry
+                gf_rule = site_registry.get_site_rule("gofile")
+                wt_cfg = gf_rule.get("wt_config") or {}
+                salt = str(wt_cfg.get("salt") or "12af056dacea0b")
+                interval = int(wt_cfg.get("interval_secs") or 14400)
+            except Exception:
+                salt = "12af056dacea0b"
+        time_slot = str(int(time.time() // max(1, interval)))
         raw = f"{ua}::{lang}::{tok}::{time_slot}::{salt}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -573,10 +858,23 @@ class GofileExtractor(BaseExtractor):
     # İçerik ağacı çekme — 3 katman + rate-limit retry
     # ------------------------------------------------------------------
 
+    _tree_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+    _tree_lock = threading.Lock()
+
     def _fetch_content_tree(self, content_id: str) -> dict[str, Any]:
+        """Kısa süreli (5 dk) önbellek: metadata + indirme aşaması aynı ağacı tekrar çekmesin."""
+        with GofileExtractor._tree_lock:
+            hit = GofileExtractor._tree_cache.get(content_id)
+            if hit and time.monotonic() - hit[0] < _TREE_TTL_SECS:
+                return hit[1]
+        tree = self._fetch_content_tree_uncached(content_id)
+        with GofileExtractor._tree_lock:
+            GofileExtractor._tree_cache[content_id] = (time.monotonic(), tree)
+        return tree
+
+    def _fetch_content_tree_uncached(self, content_id: str) -> dict[str, Any]:
         """İçerik ağacını çek: DoH bypass → curl_cffi → requests → (rate-limit retry) → HTML scrape."""
         last_exc: Optional[Exception] = None
-        import random
 
         # Katman 0: DoH + curl_cffi Chrome TLS ile ISP engelini atlatarak bağlan
         # (DNS bloğunu DoH ile, SNI/wt token doğrulamasını Chrome TLS taklitiyle geçer)
@@ -993,23 +1291,45 @@ function fetchUrl(url, headers = {{}}, timeout = 15000) {{
         dest: Path,
         total_size: int,
         progress_hook: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
+        max_conns_override: Optional[int] = None,
     ) -> None:
-        import random
         proxies = {}
         if self._proxy:
             proxies = {"http": self._proxy, "https": self._proxy}
 
-        for attempt in range(1, _MAX_RETRIES + 1):
+        seg_enabled, seg_conns, seg_mode = config.get_segmented_settings()
+        if max_conns_override is not None:
+            seg_conns = max(2, min(seg_conns, int(max_conns_override)))
+        host = urlparse(url).hostname or ""
+        downloaded = 0
+        resumable = False
+        rotated_once = False
+        use_v3_fallback = False
+        attempt = 0
+
+        while attempt < _MAX_RETRIES:
+            attempt += 1
+            _wait_if_paused(pause_event, cancel_event)
             session_ctx: Any = None
             use_cffi = False
+            resp = None
             try:
-                # curl_cffi öncelikli (HTTP/3 QUIC + Cloudflare bypass + proxy)
+                # curl_cffi öncelikli (IPv4 + HTTP/2 TLS varsayılan; yalnızca bağlantı hatasında V3 denenir)
                 try:
-                    from curl_cffi.requests import Session as CffiSession
-                    from curl_cffi import CurlHttpVersion
-                    # Proxy yoksa HTTP/3 (QUIC/UDP) ile ISP TCP engelini atla
-                    http_ver = CurlHttpVersion.V3 if not self._proxy else CurlHttpVersion.V2TLS
-                    session_ctx = CffiSession(impersonate="chrome", proxies=proxies, http_version=http_ver)
+                    _key = ("v3" if use_v3_fallback else "v2", self._proxy or "")
+                    _cur = getattr(self._dl_local, "dl_sess", None)
+                    if _cur and _cur[0] == _key:
+                        session_ctx = _cur[1]
+                    else:
+                        if _cur:
+                            try:
+                                _cur[1].close()
+                            except Exception:
+                                pass
+                        session_ctx = self._new_cffi_dl_session(proxies, use_v3=use_v3_fallback)
+                        self._dl_local.dl_sess = (_key, session_ctx)
                     use_cffi = True
                 except ImportError:
                     session_ctx = self._session
@@ -1027,21 +1347,55 @@ function fetchUrl(url, headers = {{}}, timeout = 15000) {{
                 }
                 cookies = {}
 
-                # CDN (storeX.gofile.io) paylaşımlı tokenlarda 429 verdiği için ilk denemede token göndermiyoruz.
-                # Ancak 302/401/403 alırsa veya 2. denemeden itibaren oturum gerekirse token ekliyoruz.
-                if attempt >= 2 and self._token:
+                # CDN tokenı her denemede gönder (CDN_NEED_AUTH retry döngüsünü önler)
+                if self._token:
                     wt_token = self._compute_wt(self._token, custom_ua=native_ua)
                     cookies = {"wt": wt_token, "accountToken": self._token}
                     dl_headers["Authorization"] = f"Bearer {self._token}"
                     dl_headers["X-Website-Token"] = wt_token
 
+                # Mod/Boyut kuralına göre doğrudan IDM / akıllı parçalı indirme başlat
+                if (
+                    downloaded == 0
+                    and seg_enabled
+                    and use_cffi
+                    and should_start_direct_segmented(total_size, seg_mode)
+                    and host not in self._no_parallel_hosts
+                ):
+                    try:
+                        if self._download_parallel(
+                            url, dest, total_size, dl_headers, cookies, proxies, progress_hook,
+                            start=0, num_workers=seg_conns, cancel_event=cancel_event,
+                            pause_event=pause_event, mode=seg_mode,
+                        ):
+                            return
+                    except ExtractionCancelled:
+                        raise
+                    except Exception as pexc:
+                        if type(pexc).__name__ == "_CancelledError" or (cancel_event is not None and cancel_event.is_set()):
+                            raise ExtractionCancelled("İndirme iptal edildi.") from pexc
+                        self._mark_host_slow(host)
+                        contig = int(getattr(pexc, "contiguous_bytes", 0) or 0)
+                        if contig > downloaded and dest.exists():
+                            downloaded = contig
+                            resumable = True
+                            try:
+                                with open(dest, "r+b") as _tfp:
+                                    _tfp.truncate(downloaded)
+                            except Exception:
+                                pass
+                        logger.debug("Gofile parçalı mod geçici hata (korunan=%d KB), tek bağlantıya dönülüyor (%s): %s", downloaded // 1024, host, pexc)
+
+                req_headers = dict(dl_headers)
+                if downloaded > 0 and resumable and dest.exists():
+                    req_headers["Range"] = f"bytes={downloaded}-"
+
                 resp = session_ctx.get(
-                    url, stream=True, headers=dl_headers,
-                    cookies=cookies, allow_redirects=False, timeout=(10, 60)
+                    url, stream=True, headers=req_headers,
+                    cookies=cookies, allow_redirects=False, timeout=(8, 15)
                 )
 
                 if resp.status_code in (301, 302, 303, 307, 308):
-                    # CDN sunucusu misafir isteği reddedip klasör sayfasına yönlendiriyor (oturum gerekiyor)
                     if attempt == 1 and self._token:
                         logger.info("Gofile CDN oturum istiyor, token ile deneniyor (%s)...", dest.name)
                         raise ValueError("CDN_NEED_AUTH")
@@ -1062,64 +1416,424 @@ function fetchUrl(url, headers = {{}}, timeout = 15000) {{
                 if "text/html" in ctype or "text/plain" in ctype:
                     raise ExtractionError("Gofile indirme adresi geçersiz (HTML/metin sayfası döndü).")
 
-                total = int(resp.headers.get("content-length", 0)) or total_size
-                downloaded = 0
+                is_resumed = (downloaded > 0 and resp.status_code == 206)
+                if not is_resumed:
+                    downloaded = 0
+                    total = int(resp.headers.get("content-length", 0)) or total_size
+                else:
+                    cr = resp.headers.get("content-range", "")
+                    total = int(cr.rsplit("/", 1)[1]) if "/" in cr and cr.rsplit("/", 1)[1].isdigit() else (total_size or downloaded)
+
+                if resp.headers.get("accept-ranges", "").lower() == "bytes" or resp.status_code == 206:
+                    resumable = True
+
+                switch_at = -1
+                paused_mid = False
                 start_ts = time.monotonic()
-                first_chunk_checked = False
+                last_emit = 0.0
+                session_bytes = 0
+                speed_tracker = SlidingSpeedTracker(window=3.0)
+                first_chunk_checked = is_resumed
+                open_mode = "r+b" if is_resumed else "wb"
 
-                with open(dest, "wb") as fp:
-                    for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
-                        if chunk:
-                            if not first_chunk_checked:
-                                first_chunk_checked = True
-                                # Dosya başına bakarak HTML sayfası iniyorsa hemen durdur ve dosyayı sil
-                                if chunk.lstrip().startswith((b"<!doctype html", b"<!DOCTYPE html", b"<html")):
-                                    fp.close()
-                                    dest.unlink(missing_ok=True)
-                                    if attempt == 1 and self._token:
-                                        raise ValueError("CDN_NEED_AUTH")
-                                    raise ExtractionError("Gofile indirme adresi HTML sayfası döndürdü.")
-                            fp.write(chunk)
-                            downloaded += len(chunk)
-                            if progress_hook:
-                                elapsed = time.monotonic() - start_ts
-                                speed = downloaded / elapsed if elapsed > 0 else 0
-                                self._last_speed = speed
-                                eta = int((total - downloaded) / speed) if speed > 0 else 0
-                                progress_hook({
-                                    "status": "downloading",
-                                    "downloaded_bytes": downloaded,
-                                    "total_bytes": total,
-                                    "speed": speed,
-                                    "eta": eta,
-                                    "filename": str(dest),
-                                })
+                with open(dest, open_mode) as fp:
+                    if is_resumed:
+                        fp.seek(downloaded)
+                    _is_cffi_r = "curl_cffi" in type(resp).__module__
+                    _chunk_it = resp.iter_content() if _is_cffi_r else resp.iter_content(chunk_size=16384)
+                    for chunk in _chunk_it:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ExtractionCancelled("İndirme iptal edildi.")
+                        if pause_event is not None and not pause_event.is_set():
+                            paused_mid = True
+                            break
+                        if not chunk:
+                            continue
 
-                if use_cffi and hasattr(session_ctx, "close"):
-                    session_ctx.close()
+                        if not first_chunk_checked:
+                            first_chunk_checked = True
+                            if chunk.lstrip().startswith((b"<!doctype html", b"<!DOCTYPE html", b"<html")):
+                                fp.close()
+                                dest.unlink(missing_ok=True)
+                                if attempt == 1 and self._token:
+                                    raise ValueError("CDN_NEED_AUTH")
+                                raise ExtractionError("Gofile indirme adresi HTML sayfası döndürdü.")
+
+                        fp.write(chunk)
+                        clen = len(chunk)
+                        downloaded += clen
+                        session_bytes += clen
+                        now = time.monotonic()
+                        speed_tracker.add(clen, now)
+
+                        _el = now - start_ts
+                        if _el >= 3.0 and (session_bytes / _el) < 350 * 1024 and (total - downloaded) >= 768 * 1024:
+                            self._mark_host_slow(host)
+                            if (
+                                seg_enabled
+                                and seg_mode in ("adaptive", "large", "always", "turbo")
+                                and (total - downloaded) >= min_split_bytes(seg_mode)
+                                and use_cffi
+                                and host not in self._no_parallel_hosts
+                            ):
+                                self._dl_local.dl_sess = None
+                                switch_at = downloaded
+                                break
+                            if not rotated_once and resumable and use_cffi:
+                                rotated_once = True
+                                self._dl_local.dl_sess = None
+                                attempt -= 1
+                                raise ValueError("FAST_ROTATE")
+
+                        if progress_hook and (now - last_emit >= 0.15):
+                            last_emit = now
+                            speed = speed_tracker.rate(now)
+                            self._last_speed = speed
+                            eta = int((total - downloaded) / speed) if speed > 0 and total > 0 else 0
+                            progress_hook({
+                                "status": "downloading",
+                                "status_detail": "Tek bağlantı iniyor",
+                                "downloaded_bytes": downloaded,
+                                "total_bytes": total,
+                                "speed": speed,
+                                "eta": eta,
+                                "filename": str(dest),
+                            })
+
+                if hasattr(resp, "close"):
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                resp = None
+
+                if paused_mid:
+                    _wait_if_paused(pause_event, cancel_event)
+                    if not resumable:
+                        downloaded = 0
+                    self._resume_tail(
+                        url, dest, total, downloaded, resumable, dl_headers, cookies, proxies,
+                        progress_hook, cancel_event, pause_event, seg_enabled, seg_conns, seg_mode, use_cffi,
+                    )
+                    return
+
+                if switch_at >= 0:
+                    if use_cffi and hasattr(session_ctx, "close"):
+                        try:
+                            session_ctx.close()
+                        except Exception:
+                            pass
+                    smart_n = compute_smart_workers(total - switch_at, seg_conns, seg_mode)
+                    logger.info(
+                        "Gofile yavaş (%s): kalan kısım %d/%d parçalı indirmeye geçiliyor (%s).",
+                        dest.name, smart_n, seg_conns, seg_mode,
+                    )
+                    try:
+                        if self._download_parallel(
+                            url, dest, total, dl_headers, cookies, proxies, progress_hook,
+                            start=switch_at, num_workers=seg_conns,
+                            cancel_event=cancel_event, pause_event=pause_event,
+                            mode=seg_mode, skip_probe=resumable,
+                        ):
+                            return
+                    except ExtractionCancelled:
+                        raise
+                    except Exception as pexc:
+                        if type(pexc).__name__ == "_CancelledError" or (cancel_event is not None and cancel_event.is_set()):
+                            raise ExtractionCancelled("İndirme iptal edildi.") from pexc
+                        self._mark_host_slow(host)
+                        contig = int(getattr(pexc, "contiguous_bytes", 0) or 0)
+                        if contig > downloaded and dest.exists():
+                            downloaded = contig
+                            resumable = True
+                            try:
+                                with open(dest, "r+b") as _tfp:
+                                    _tfp.truncate(downloaded)
+                            except Exception:
+                                pass
+                        raise ValueError(f"PARALLEL_FAILED: {pexc}")
+                    self._no_parallel_hosts.add(host)
+                    raise ValueError("PARALLEL_UNSUPPORTED")
+
+                if progress_hook:
+                    progress_hook({
+                        "status": "downloading",
+                        "downloaded_bytes": downloaded,
+                        "total_bytes": total or downloaded,
+                        "speed": speed_tracker.rate(),
+                        "eta": 0,
+                        "filename": str(dest),
+                    })
                 return
 
-            except Exception as exc:
+            except BaseException as exc:
+                if resp is not None and hasattr(resp, "close"):
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                if (
+                    isinstance(exc, ExtractionCancelled)
+                    or type(exc).__name__ == "_CancelledError"
+                    or (cancel_event is not None and cancel_event.is_set())
+                ):
+                    dest.unlink(missing_ok=True)
+                    if isinstance(exc, ExtractionCancelled):
+                        raise
+                    raise ExtractionCancelled("İndirme iptal edildi.") from exc
+
                 if use_cffi and session_ctx and hasattr(session_ctx, "close"):
                     try:
                         session_ctx.close()
                     except Exception:
                         pass
+                    self._dl_local.dl_sess = None
+                if "timed out" in str(exc).lower() or "connection" in str(exc).lower():
+                    self._mark_host_slow(host)
+                    if attempt == 1:
+                        use_v3_fallback = not use_v3_fallback
                 if dest.exists() and dest.stat().st_size < 50000 and "html" in str(dest).lower():
                     dest.unlink(missing_ok=True)
                 if any(x in str(exc).lower() for x in ("premium", "bulunamadı", "şifre")):
                     raise
-                if attempt == _MAX_RETRIES:
+                if attempt >= _MAX_RETRIES:
                     raise ExtractionError(
                         f"Gofile dosya indirme {_MAX_RETRIES} denemeden sonra başarısız: {exc}"
                     ) from exc
-                wait = _RETRY_BACKOFF * (2 ** (attempt - 1)) + random.uniform(1.0, 3.0)
-                if "CDN_NEED_AUTH" in str(exc):
-                    wait = 0.5
-                    logger.debug("Gofile retry %d/%d (%ds): %s", attempt, _MAX_RETRIES, int(wait), exc)
+                wait = _RETRY_BACKOFF * (2 ** max(0, attempt - 1)) + random.uniform(0.5, 1.5)
+                exc_low = str(exc).lower()
+                if "FAST_ROTATE" in str(exc):
+                    wait = 0.05
+                    logger.info("Gofile yavaş soket (%s: %d KB alındı), taze bağlantı & protokol deneniyor.", dest.name, int(downloaded / 1024))
+                elif any(k in exc_low for k in ("timed out", "curl: (28)", "ngtcp2", "connection reset", "recv failure")):
+                    GofileExtractor._prefer_v2 = not getattr(GofileExtractor, "_prefer_v2", True)
+                    wait = 0.25
+                    logger.warning("Gofile bağlantı hatası/zaman aşımı (%s), protokol değiştirilip yeniden deneniyor: %s", dest.name, exc)
+                elif "SLOW_CONNECTION" in str(exc) or "PARALLEL_" in str(exc):
+                    wait = 0.3
+                    logger.info("Gofile bağlantı yenileniyor (%s).", dest.name)
+                elif "CDN_NEED_AUTH" in str(exc):
+                    wait = 0.3
+                    logger.debug("Gofile retry %d/%d (%.1fs): %s", attempt, _MAX_RETRIES, wait, exc)
                 else:
-                    logger.warning("Gofile retry %d/%d (%ds): %s", attempt, _MAX_RETRIES, int(wait), exc)
-                time.sleep(wait)
+                    logger.warning("Gofile retry %d/%d (%.1fs): %s", attempt, _MAX_RETRIES, wait, exc)
+                if _sleep_cancelable(wait, cancel_event):
+                    dest.unlink(missing_ok=True)
+                    raise ExtractionCancelled("İndirme iptal edildi.")
+
+    def _resume_tail(
+        self,
+        url: str,
+        dest: Path,
+        total: int,
+        start_offset: int,
+        resumable: bool,
+        dl_headers: dict[str, str],
+        cookies: dict[str, str],
+        proxies: dict[str, str],
+        progress_hook: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event],
+        pause_event: Optional[threading.Event],
+        seg_enabled: bool,
+        seg_conns: int,
+        seg_mode: str,
+        use_cffi: bool,
+    ) -> None:
+        """Duraklatma sonrası kaldığı bayttan devam et (Range destekliyorsa parçalıya da geçebilir)."""
+        host = urlparse(url).hostname or ""
+        if (
+            resumable
+            and seg_enabled
+            and use_cffi
+            and total > 0
+            and (total - start_offset) >= min_split_bytes(seg_mode)
+            and host not in self._no_parallel_hosts
+        ):
+            if self._download_parallel(
+                url, dest, total, dl_headers, cookies, proxies, progress_hook,
+                start=start_offset, num_workers=seg_conns,
+                cancel_event=cancel_event, pause_event=pause_event,
+                mode=seg_mode, skip_probe=True,
+            ):
+                return
+
+        downloaded = start_offset if resumable else 0
+        while True:
+            _wait_if_paused(pause_event, cancel_event)
+            req_h = dict(dl_headers)
+            if downloaded > 0:
+                req_h["Range"] = f"bytes={downloaded}-"
+            sess = self._new_cffi_dl_session(proxies, use_v3=False) if use_cffi else self._session
+            paused_again = False
+            try:
+                resp = sess.get(url, stream=True, headers=req_h, cookies=cookies, allow_redirects=False, timeout=(15, 25))
+                resp.raise_for_status()
+                is_part = (downloaded > 0 and resp.status_code == 206)
+                if not is_part:
+                    downloaded = 0
+                mode = "r+b" if is_part else "wb"
+                tracker = SlidingSpeedTracker(window=3.0)
+                last_emit = 0.0
+                with open(dest, mode) as fp:
+                    if is_part:
+                        fp.seek(downloaded)
+                    _is_cffi_t = "curl_cffi" in type(resp).__module__
+                    _chunk_it_t = resp.iter_content() if _is_cffi_t else resp.iter_content(chunk_size=16384)
+                    for chunk in _chunk_it_t:
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ExtractionCancelled("İndirme iptal edildi.")
+                        if pause_event is not None and not pause_event.is_set():
+                            paused_again = True
+                            break
+                        if not chunk:
+                            continue
+                        fp.write(chunk)
+                        clen = len(chunk)
+                        downloaded += clen
+                        now = time.monotonic()
+                        tracker.add(clen, now)
+                        if progress_hook and (now - last_emit >= 0.15):
+                            last_emit = now
+                            sp = tracker.rate(now)
+                            self._last_speed = sp
+                            progress_hook({
+                                "status": "downloading",
+                                "downloaded_bytes": downloaded,
+                                "total_bytes": total,
+                                "speed": sp,
+                                "eta": int((total - downloaded) / sp) if sp > 0 and total > 0 else 0,
+                                "filename": str(dest),
+                            })
+            finally:
+                if use_cffi and hasattr(sess, "close"):
+                    try:
+                        sess.close()
+                    except Exception:
+                        pass
+            if not paused_again:
+                return
+
+    def _download_parallel(
+        self,
+        url: str,
+        dest: Path,
+        total_size: int,
+        dl_headers: dict[str, str],
+        cookies: dict[str, str],
+        proxies: dict[str, str],
+        progress_hook: Optional[Callable[[dict[str, Any]], None]],
+        start: int = 0,
+        num_workers: int = _PARALLEL_CONNS,
+        cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
+        mode: str = "adaptive",
+        skip_probe: bool = False,
+    ) -> bool:
+        """Range + Smart Work-Stealing ile çok parçalı indirme. Sunucu Range desteklemiyorsa False döner."""
+        host = urlparse(url).hostname or ""
+        total = total_size
+        warm_pool = self._get_thread_host_pool(host)
+        already_verified = host in self._range_verified_hosts and total_size > 0
+
+        if not ((skip_probe or already_verified) and total_size > 0):
+            from curl_cffi import CurlHttpVersion
+            probe_ok = False
+            last_probe_err: Optional[Exception] = None
+            proto_order = [CurlHttpVersion.V2TLS]
+            if host not in self._host_v2_only and not self._proxy:
+                best_p = self._host_best_proto.get(host)
+                proto_order = [best_p] if best_p is not None else [CurlHttpVersion.V2TLS, CurlHttpVersion.V1_1]
+                if CurlHttpVersion.V1_1 not in proto_order:
+                    proto_order.append(CurlHttpVersion.V1_1)
+                if CurlHttpVersion.V3 not in proto_order:
+                    proto_order.append(CurlHttpVersion.V3)
+            for p_try, p_ver in enumerate(proto_order[:3]):
+                probe_sess = (
+                    warm_pool.pop(0, None) if p_try == 0 and host not in self._host_best_proto else None
+                ) or self._new_cffi_dl_session(proxies, http_ver=p_ver)
+                probe_kept = False
+                r = None
+                try:
+                    h = dict(dl_headers)
+                    h["Range"] = "bytes=0-0"
+                    r = probe_sess.get(
+                        url, stream=True, headers=h, cookies=cookies, allow_redirects=False, timeout=(6, 10),
+                    )
+                    cr = r.headers.get("content-range", "")
+                    if r.status_code == 206 and "/" in cr:
+                        total = int(cr.rsplit("/", 1)[1])
+                        probe_ok = True
+                        self._range_verified_hosts.add(host)
+                        self._host_best_proto[host] = p_ver
+                        try:
+                            for _ in r.iter_content():
+                                break
+                        except Exception:
+                            pass
+                        warm_pool[0] = probe_sess
+                        probe_kept = True
+                        break
+                    if r.status_code in (301, 302, 303, 307, 308) and p_ver != CurlHttpVersion.V2TLS:
+                        self._host_v2_only.add(host)
+                        continue
+                    # Sunucu açıkça 200/4xx döndürdüyse Range desteklemiyordur; ağ zaman aşımı ise tekrar dene
+                    if r.status_code in (200, 400, 403, 416):
+                        self._no_parallel_hosts.add(host)
+                        return False
+                except Exception as pexc:
+                    last_probe_err = pexc
+                    self._mark_host_slow(host)
+                finally:
+                    if r is not None and hasattr(r, "close"):
+                        try:
+                            r.close()
+                        except Exception:
+                            pass
+                    if not probe_kept:
+                        try:
+                            probe_sess.close()
+                        except Exception:
+                            pass
+            if not probe_ok:
+                if total_size > 0 and last_probe_err is not None:
+                    total = total_size
+                else:
+                    return False
+
+        smart_n = compute_smart_workers(total - start, num_workers, mode)
+        logger.debug(
+            "Gofile akıllı parçalı (%s): %d/%d bağlantı (%s, kalan=%.2f MB)",
+            mode, smart_n, num_workers, dest.name, (total - start) / (1024 * 1024),
+        )
+
+        # Sunucu bazlı öğrenilen protokolle başla; timeout döngüsünde V2TLS -> V1_1 -> V3 döndür
+        def _make_worker_session(gen: int) -> Any:
+            from curl_cffi import CurlHttpVersion
+            if host in self._host_v2_only or self._proxy:
+                return self._new_cffi_dl_session(proxies, http_ver=CurlHttpVersion.V2TLS)
+            base_ver = self._host_best_proto.get(host, CurlHttpVersion.V2TLS)
+            candidates = [base_ver] + [v for v in (CurlHttpVersion.V2TLS, CurlHttpVersion.V1_1, CurlHttpVersion.V3) if v != base_ver]
+            chosen = candidates[gen % len(candidates)] if gen >= 1 else base_ver
+            return self._new_cffi_dl_session(proxies, http_ver=chosen)
+
+        ranged_work_stealing_download(
+            url=url,
+            dest=dest,
+            total_size=total,
+            num_workers=num_workers,
+            make_session=_make_worker_session,
+            headers=dl_headers,
+            cookies=cookies,
+            start=start,
+            allow_redirects=False,
+            progress_hook=progress_hook,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+            mode=mode,
+            session_pool=warm_pool,
+            keep_sessions=True,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Tracker
