@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Goonbox",
+    "domain": "goonbox.cr",
+    "Capabilities": "Albums, Images, Videos",
+    "Authentication": null,
+    "engine": "gallery-dl"
+  },
+  {
+    "name": "Goonbox Mirror",
+    "domain": "goonbox.cc",
+    "Capabilities": "Albums, Images, Videos",
+    "Authentication": null,
+    "engine": "gallery-dl"
+  },
+  {
+    "name": "Motherless",
+    "domain": "motherless.xxx",
+    "Capabilities": "Galleries, Groups, Images, Videos",
+    "Authentication": null,
+    "engine": "gallery-dl"
+  },
+  {
+    "name": "SimpCity",
+    "domain": "simpcity.cr",
+    "Capabilities": "Forum Threads, Media",
+    "Authentication": "Cookies",
+    "engine": "gallery-dl"
+  },
+  {
+    "name": "Bunkr Mirror (.cr)",
+    "domain": "bunkr.cr",
+    "Capabilities": "Albums, Files, Videos",
+    "Authentication": null,
+    "engine": "bunkr"
+  },
+  {
+    "name": "Pixeldrain Mirror (.net)",
+    "domain": "pixeldrain.net",
+    "Capabilities": "Files, Lists",
+    "Authentication": null,
+    "engine": "pixeldrain"
+  }
+]

@@ -1,0 +1,586 @@
+{
+  "builtin_platforms": {
+    "4chan": {
+      "domains": [
+        "4chan.org",
+        "boards.4chan.org",
+        "boards.4channel.org"
+      ],
+      "engine": "gallery-dl",
+      "folder": "4chan",
+      "is_gallery": true,
+      "name": "4chan"
+    },
+    "bluesky": {
+      "domains": [
+        "bsky.app"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Bluesky",
+      "is_gallery": true,
+      "name": "Bluesky"
+    },
+    "bunkr": {
+      "domains": [
+        "bunkr.cr",
+        "bunkr.lv",
+        "bunkr.la",
+        "bunkr.ws",
+        "bunkr.red",
+        "bunkr.si",
+        "bunkr.fi",
+        "bunkr.ph",
+        "bunkr.ac",
+        "bunkr.sk",
+        "bunkr.black",
+        "bunkr.site",
+        "bunkr.cat",
+        "bunkr.is",
+        "bunkr.ru",
+        "bunkr.su",
+        "bunkrr.su",
+        "bunkrr.ru",
+        "balbums.st"
+      ],
+      "engine": "bunkr",
+      "folder": "Bunkr",
+      "is_gallery": true,
+      "name": "Bunkr"
+    },
+    "coomer": {
+      "domains": [
+        "coomer.su",
+        "coomer.st",
+        "coomer.party"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Coomer",
+      "is_gallery": true,
+      "name": "Coomer"
+    },
+    "cyberdrop": {
+      "domains": [
+        "cyberdrop.me",
+        "cyberdrop.cr",
+        "cyberdrop.to",
+        "cyberdrop.nl"
+      ],
+      "engine": "cyberdrop-dl",
+      "folder": "Cyberdrop",
+      "is_gallery": true,
+      "name": "Cyberdrop"
+    },
+    "dailymotion": {
+      "domains": [
+        "dailymotion.com",
+        "dai.ly"
+      ],
+      "engine": "yt-dlp",
+      "folder": "Dailymotion",
+      "is_gallery": false,
+      "name": "Dailymotion"
+    },
+    "ehentai": {
+      "domains": [
+        "e-hentai.org",
+        "exhentai.org"
+      ],
+      "engine": "gallery-dl",
+      "folder": "E-Hentai",
+      "is_gallery": true,
+      "name": "E-Hentai"
+    },
+    "erome": {
+      "domains": [
+        "erome.com"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Erome",
+      "is_gallery": true,
+      "name": "Erome"
+    },
+    "flickr": {
+      "domains": [
+        "flickr.com",
+        "flic.kr"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Flickr",
+      "is_gallery": true,
+      "name": "Flickr"
+    },
+    "gofile": {
+      "domains": [
+        "gofile.io"
+      ],
+      "engine": "gofile",
+      "folder": "Gofile",
+      "is_gallery": true,
+      "name": "Gofile"
+    },
+    "goonbox": {
+      "domains": [
+        "goonbox.cr",
+        "goonbox.cc"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Goonbox",
+      "is_gallery": true,
+      "name": "Goonbox"
+    },
+    "hanime": {
+      "domains": [
+        "hanime.tv",
+        "hentai.tv"
+      ],
+      "engine": "yt-dlp",
+      "folder": "Hanime",
+      "is_gallery": false,
+      "name": "Hanime"
+    },
+    "hitomi": {
+      "domains": [
+        "hitomi.la"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Hitomi",
+      "is_gallery": true,
+      "name": "Hitomi"
+    },
+    "imgur": {
+      "domains": [
+        "imgur.com",
+        "i.imgur.com"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Imgur",
+      "is_gallery": true,
+      "name": "Imgur"
+    },
+    "instagram": {
+      "domains": [
+        "instagram.com"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Instagram",
+      "is_gallery": true,
+      "name": "Instagram"
+    },
+    "kemono": {
+      "domains": [
+        "kemono.su",
+        "kemono.cr",
+        "kemono.party"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Kemono",
+      "is_gallery": true,
+      "name": "Kemono"
+    },
+    "mega": {
+      "domains": [
+        "mega.nz",
+        "mega.co.nz"
+      ],
+      "engine": "mega",
+      "folder": "Mega",
+      "is_gallery": true,
+      "name": "Mega"
+    },
+    "motherless": {
+      "domains": [
+        "motherless.xxx",
+        "motherless.com"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Motherless",
+      "is_gallery": true,
+      "name": "Motherless"
+    },
+    "pixeldrain": {
+      "domains": [
+        "pixeldrain.com",
+        "pixeldrain.net",
+        "pd.cybar.xyz"
+      ],
+      "engine": "pixeldrain",
+      "folder": "Pixeldrain",
+      "is_gallery": true,
+      "name": "Pixeldrain"
+    },
+    "pornhub": {
+      "domains": [
+        "pornhub.com",
+        "pornhubpremium.com"
+      ],
+      "engine": "yt-dlp",
+      "folder": "Pornhub",
+      "is_gallery": false,
+      "name": "Pornhub"
+    },
+    "reddit": {
+      "domains": [
+        "reddit.com",
+        "redd.it",
+        "i.redd.it",
+        "v.redd.it"
+      ],
+      "engine": "reddit",
+      "folder": "Reddit",
+      "is_gallery": true,
+      "name": "Reddit"
+    },
+    "rule34": {
+      "domains": [
+        "rule34.xxx",
+        "rule34.xyz",
+        "rule34.paheal.net",
+        "rule34vault.com"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Rule34",
+      "is_gallery": true,
+      "name": "Rule34"
+    },
+    "simpcity": {
+      "domains": [
+        "simpcity.cr",
+        "simpcity.su",
+        "simpcity.to",
+        "simpcity.org"
+      ],
+      "engine": "gallery-dl",
+      "folder": "SimpCity",
+      "is_gallery": true,
+      "name": "SimpCity"
+    },
+    "soundcloud": {
+      "domains": [
+        "soundcloud.com"
+      ],
+      "engine": "yt-dlp",
+      "folder": "SoundCloud",
+      "is_gallery": false,
+      "name": "SoundCloud"
+    },
+    "tiktok": {
+      "domains": [
+        "tiktok.com"
+      ],
+      "engine": "yt-dlp",
+      "folder": "TikTok",
+      "is_gallery": false,
+      "name": "TikTok"
+    },
+    "twitch": {
+      "domains": [
+        "twitch.tv",
+        "clips.twitch.tv"
+      ],
+      "engine": "yt-dlp",
+      "folder": "Twitch",
+      "is_gallery": false,
+      "name": "Twitch"
+    },
+    "twitter": {
+      "domains": [
+        "twitter.com",
+        "x.com",
+        "t.co"
+      ],
+      "engine": "gallery-dl",
+      "folder": "Twitter",
+      "is_gallery": true,
+      "name": "Twitter / X"
+    },
+    "vimeo": {
+      "domains": [
+        "vimeo.com",
+        "player.vimeo.com"
+      ],
+      "engine": "yt-dlp",
+      "folder": "Vimeo",
+      "is_gallery": false,
+      "name": "Vimeo"
+    },
+    "xhamster": {
+      "domains": [
+        "xhamster.com",
+        "xhamster.desi",
+        "xhamster2.com"
+      ],
+      "engine": "yt-dlp",
+      "folder": "xHamster",
+      "is_gallery": false,
+      "name": "xHamster"
+    },
+    "xvideos": {
+      "domains": [
+        "xvideos.com",
+        "xvideos.es",
+        "xvideos.red"
+      ],
+      "engine": "yt-dlp",
+      "folder": "XVideos",
+      "is_gallery": false,
+      "name": "XVideos"
+    },
+    "youtube": {
+      "domains": [
+        "youtube.com",
+        "youtu.be"
+      ],
+      "engine": "yt-dlp",
+      "folder": "YouTube",
+      "is_gallery": false,
+      "name": "YouTube"
+    }
+  },
+  "bundles": {
+    "gdl_plugins": {
+      "file_count": 3,
+      "min_app_version": "2.0.0",
+      "sha256": "8d5eee225ae3493c10592fa7784b47d2afa7955a7f3b5cc162a99fa9d11cb5c7",
+      "url": "https://sayrias.github.io/suylios-downloader/hotfix/bundles/gdl_plugins-2026112108.zip",
+      "version": "2026112108"
+    },
+    "supported_sites_delta": {
+      "sha256": "9ba8d1191442fc1361794fba0b986f7764649c291a1cb6a015fc5b92e7e0e690",
+      "url": "https://sayrias.github.io/suylios-downloader/hotfix/supported_sites.delta.json",
+      "version": "2026112108"
+    },
+    "yt_dlp_plugins": {
+      "file_count": 1,
+      "min_app_version": "2.0.0",
+      "sha256": "76c211f50389339aaa625604025bb889b0d6a50d4845fb50d190f3aef78348c5",
+      "url": "https://sayrias.github.io/suylios-downloader/hotfix/bundles/yt_dlp_plugins-2026112108.zip",
+      "version": "2026112108"
+    }
+  },
+  "global_network": {
+    "chrome_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "default_blocklist": [
+      "tiktok.com",
+      "instagram.com",
+      "facebook.com",
+      "fb.watch",
+      "youtube.com",
+      "youtu.be",
+      "twitter.com",
+      "x.com"
+    ],
+    "doh_endpoints": [
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/resolve",
+      "https://dns.quad9.net/dns-query"
+    ],
+    "wreq_impersonation": "chrome131"
+  },
+  "manifest_seq": 2026112108,
+  "min_app_version": "2.0.0",
+  "published_at": "2026-11-21T08:08:40Z",
+  "pypi_pins": {
+    "async-mega-py": {
+      "blocked_versions": [],
+      "enabled": true,
+      "max_version": null,
+      "reason": ""
+    },
+    "cyberdrop-dl": {
+      "blocked_versions": [],
+      "enabled": true,
+      "max_version": null,
+      "reason": ""
+    },
+    "gallery-dl": {
+      "blocked_versions": [],
+      "enabled": true,
+      "max_version": null,
+      "reason": ""
+    },
+    "yt-dlp": {
+      "blocked_versions": [],
+      "enabled": true,
+      "max_version": null,
+      "reason": ""
+    }
+  },
+  "runtime_patches": {
+    "mega_vault_patch": true,
+    "ytdlp_youtube_continuation_patch": true,
+    "ytdlp_yt_player_clients": [
+      "ios",
+      "android",
+      "mweb",
+      "web"
+    ]
+  },
+  "schema_version": 3,
+  "sites": {
+    "bunkr": {
+      "domains": [
+        "bunkr.cr",
+        "bunkr.lv",
+        "bunkr.la",
+        "bunkr.ws",
+        "bunkr.red",
+        "bunkr.si",
+        "bunkr.fi",
+        "bunkr.ph",
+        "bunkr.ac",
+        "bunkr.sk",
+        "bunkr.black",
+        "bunkr.site",
+        "bunkr.cat",
+        "bunkr.is",
+        "bunkr.ru",
+        "bunkr.su",
+        "bunkrr.su",
+        "bunkrr.ru",
+        "balbums.st"
+      ],
+      "extract_rules": {
+        "album_selectors": [
+          "a[href*='/v/']",
+          "a[href*='/i/']",
+          "a[href*='/d/']",
+          "a[href*='/f/']",
+          ".grid-images a",
+          ".grid-images_box a",
+          "a.grid-images_box-link",
+          "a.image-container"
+        ],
+        "api_sign_paths": [
+          "/api/_001_v2"
+        ],
+        "fallback_sign_url": "https://glb-apisign.cdn.cr/sign",
+        "js_cdn_regex": "var\\s+jsCDN\\s*=\\s*[\"']([^\"']+)[\"']"
+      },
+      "folder": "Bunkr",
+      "hotfix_override": null,
+      "transport": {
+        "adaptive_min_bytes": 2097152,
+        "impersonate": "chrome120",
+        "ipv4_only": true,
+        "max_concurrent_files": 2,
+        "max_connections_per_file": 2,
+        "slow_switch_bps": 358400
+      }
+    },
+    "gofile": {
+      "api_base": "https://api.gofile.io",
+      "folder": "Gofile",
+      "hotfix_override": null,
+      "transport": {
+        "force_h2_on_redirect": true,
+        "max_concurrent_files": 3,
+        "slow_max_conns": 5,
+        "slow_max_files": 1,
+        "slow_threshold_bps": 409600
+      },
+      "web_base": "https://gofile.io",
+      "wt_config": {
+        "auto_discover_js_urls": [
+          "https://gofile.io/dist/js/config.js",
+          "https://gofile.io/dist/js/wt.obf.js"
+        ],
+        "fallback_salts": [
+          "12af056dacea0b",
+          "9844d94d963d30"
+        ],
+        "interval_secs": 14400,
+        "salt": "12af056dacea0b",
+        "static_wt": "4fd6sg89d7s6",
+        "x_bl": "en-US"
+      }
+    },
+    "goonbox": {
+      "domains": [
+        "goonbox.cr",
+        "goonbox.cc"
+      ],
+      "folder": "Goonbox",
+      "preserve_request_host": true
+    },
+    "motherless": {
+      "domains": [
+        "motherless.xxx",
+        "motherless.com"
+      ],
+      "folder": "Motherless",
+      "preserve_request_host": true
+    },
+    "pixeldrain": {
+      "api_path": "/api",
+      "domains": [
+        "pixeldrain.com",
+        "pixeldrain.net",
+        "pd.cybar.xyz"
+      ],
+      "folder": "Pixeldrain",
+      "hotfix_override": null,
+      "transport": {
+        "max_concurrent_files": 2,
+        "max_connections_per_file": 8
+      }
+    },
+    "simpcity": {
+      "domains": [
+        "simpcity.cr",
+        "simpcity.su",
+        "simpcity.to",
+        "simpcity.org"
+      ],
+      "folder": "SimpCity",
+      "headers_template": {
+        "Origin": "{scheme}://{host}",
+        "Referer": "{scheme}://{host}/"
+      },
+      "is_gallery": true
+    },
+    "video_hosts": {
+      "doodstream": {
+        "domains": [
+          "doodstream.com",
+          "dood.to",
+          "dood.so",
+          "dood.la",
+          "dood.ws",
+          "d0000d.com",
+          "d000d.com",
+          "ds2play.com",
+          "doods.pro"
+        ],
+        "pass_md5_regex": "(/pass_md5/[^?'\"\\s]+)"
+      },
+      "streamtape": {
+        "domains": [
+          "streamtape.com",
+          "streamtape.to",
+          "streamtape.xyz",
+          "streamta.pe",
+          "shavem.pw"
+        ],
+        "link_regex": "document\\.getElementById\\(['\"](botlink|robotlink|ideoolink|norobotlink)['\"]\\)\\.innerHTML\\s*=\\s*['\"]([^'\"]*)['\"]\\s*\\+\\s*\\(['\"]([^'\"]+)['\"]\\)((?:\\.substring\\(\\d+\\))+)"
+      },
+      "streamwish": {
+        "domains": [
+          "streamwish.com",
+          "streamwish.to",
+          "filemoon.sx",
+          "filemoon.to",
+          "streamsb.com",
+          "sbembed.com",
+          "sbspeed.com"
+        ]
+      },
+      "voe": {
+        "domains": [
+          "voe.sx",
+          "voe-unblock.com",
+          "launchtvy.com"
+        ]
+      }
+    }
+  }
+}
