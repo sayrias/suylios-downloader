@@ -378,7 +378,7 @@
   },
   "manifest_seq": 2026112108,
   "min_app_version": "2.0.0",
-  "published_at": "2026-11-21T08:08:40Z",
+  "published_at": "2026-11-21T08:10:42Z",
   "pypi_pins": {
     "async-mega-py": {
       "blocked_versions": [],
